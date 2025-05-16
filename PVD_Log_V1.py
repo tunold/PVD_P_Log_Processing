@@ -55,11 +55,9 @@ if uploaded_file is not None:
     st.json(results)
 
     # Plot: Element composition (at%)
-    col1, col2 = st.columns(2)
     if "QCM at%" in results:
         at_data = results["QCM at%"]
-        with col1:
-            st.subheader("📈 QCM Element Composition (at%)")
+        with st.expander("📈 QCM Element Composition (at%)", expanded=False):
             fig1, ax1 = plt.subplots(figsize=(5, 3))
             ax1.bar(at_data.keys(), at_data.values())
             ax1.set_ylabel("at%")
@@ -100,18 +98,19 @@ if uploaded_file is not None:
             ts_df = ts_filtered if use_filtered else ts_raw
 
             variables = [col for col in ts_df.columns if col != "time_seconds"]
-            st.write("Select up to 4 variables to plot (one per subplot):")
+            st.write("Select multiple variables per subplot (4 plots total):")
             selected_vars = [
-                st.selectbox(f"Y-axis variable for plot {i+1}", [""] + variables, key=f"var{i}")
+                st.multiselect(f"Y-axis variables for plot {i+1}", variables, key=f"multi_var{i}")
                 for i in range(4)
             ]
 
-            fig, axs = plt.subplots(2, 2, figsize=(10, 6))
+            fig, axs = plt.subplots(2, 2, figsize=(10, 6), sharex=True, sharey=True)
             axs = axs.flatten()
-            for i, var in enumerate(selected_vars):
-                if var:
+            for i, var_list in enumerate(selected_vars):
+                for var in var_list:
                     axs[i].plot(ts_df["time_seconds"], ts_df[var], label=var)
-                    axs[i].set_title(var)
+                if var_list:
+                    axs[i].set_title(", ".join(var_list))
                     axs[i].set_xlabel("Time (s)")
                     axs[i].legend()
             plt.tight_layout()

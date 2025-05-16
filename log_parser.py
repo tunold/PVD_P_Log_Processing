@@ -30,18 +30,35 @@ def extract_materials(df):
             materials[int(number)] = material
     return materials
 
-def map_qcm_thickness_columns(df, ordered_materials):
+def map_qcm_columns(df, ordered_materials):
+    """
+    Ordnet alle QCM-Parameter korrekt den Materialien zu:
+    - QCM1 *_1 → source 1
+    - QCM2 *_2 → source 2
+    - QCM2 *_1 → source 3
+    - QCM1 *_2 → source 4
+    """
     mapping = {}
-    qcm_columns = [
-        'QCM1 C_THIK_1',
-        'QCM1 C_THIK_2',
-        'QCM2 C_THIK_1',
-        'QCM2 C_THIK_2'
+    qcm_template_map = {
+        'QCM1': {1: 1, 2: 4},
+        'QCM2': {1: 3, 2: 2},
+    }
+
+    qcm_fields = [
+        'C_THIK', 'CH_TIME', 'FILMNAM', 'RATET1', 'SHTSRC', 'XLIFE', 'XSTAT'
     ]
-    for col, material in zip(qcm_columns, ordered_materials):
-        if col in df.columns:
-            mapping[col] = f"QCM Thickness {material}"
+
+    for system, channels in qcm_template_map.items():
+        for channel_idx, source_idx in channels.items():
+            if source_idx > len(ordered_materials):
+                continue
+            material = ordered_materials[source_idx - 1]
+            for field in qcm_fields:
+                col_name = f"{system} {field}_{channel_idx}"
+                if col_name in df.columns:
+                    mapping[col_name] = f"QCM {field} {material}"
     return mapping
+
 
 def compute_composition_ratios(source_values, reference_values=None):
     ratios = {}
@@ -127,7 +144,7 @@ def process_log_dataframe_dynamic(df, metadata=None):
 
     materials_map = extract_materials(df)
     ordered_materials = [materials_map[k] for k in sorted(materials_map)]
-    df.rename(columns=map_qcm_thickness_columns(df, ordered_materials), inplace=True)
+    df.rename(columns=map_qcm_columns(df, ordered_materials), inplace=True)
 
     T_cols = [f'{num} - {mat} T' for num, mat in materials_map.items()]
     TSP_cols = [f'{num} - {mat} TSP' for num, mat in materials_map.items()]
@@ -181,6 +198,19 @@ def process_log_dataframe_dynamic(df, metadata=None):
         # Speichere Zeitreihen (ungefiltert und gefiltert) zur optionalen Visualisierung
     results["Time Series Raw"] = df.copy()
     results["Time Series Filtered"] = filtered_df.copy()
+
+    for col in df.columns:
+        if col.startswith("QCM RATET1") and col.split()[-1] in ordered_materials:
+            material = col.split()[-1]
+            rate_nm_s = df[col]  # [nm/s]
+            props = MATERIAL_PROPERTIES.get(material)
+            if props:
+                rho = props['density']
+                M = props['molar_mass']
+                rate_nmol_s = rate_nm_s * 1e-7 * rho / M * AVOGADRO * 1e9  # [nmol/s]
+                df[f"QCM RATE {material} nmol_s"] = rate_nmol_s
+
+
 
     return {**metadata, **results}
 
