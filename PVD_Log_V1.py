@@ -50,6 +50,44 @@ if uploaded_file is not None:
 
     df, metadata = load_log_csv(tmp_path)
     results = process_log_dataframe_dynamic(df, metadata=metadata)
+    df = results.get("Time Series Raw", df)
+    results["Time Series Raw"] = df  # aktualisierte Spalten wieder zurückschreiben
+
+    # QCM-RATET1_x in nmol/s berechnen
+    for col in df.columns:
+        if col.startswith("QCM RATET1") and col.split()[-1] in df.columns:
+            continue  # skip invalid entries
+        if col.startswith("QCM RATET1"):
+            material = col.split()[-1]
+            rate_nm_s = df[col]
+            from log_parser import MATERIAL_PROPERTIES, AVOGADRO
+
+            props = MATERIAL_PROPERTIES.get(material)
+            if props:
+                rho = props['density']
+                M = props['molar_mass']
+                rate_nmol_s = rate_nm_s * 1e-7 * rho / M * 1e9 #* AVOGADRO   # [nmol/s]
+                df[f"QCM RATE {material} nmol_s"] = rate_nmol_s
+    df = results.get("Time Series Raw", df)
+
+
+    # PV vs. QCM-Rate Abweichung berechnen
+    pv_cols = [col for col in df.columns if col.endswith("PV")]
+    qcm_rate_cols = [col for col in df.columns if col.startswith("QCM RATE") and col.endswith("nmol_s")]
+    deviations = {}
+    for pv_col in pv_cols:
+        mat = pv_col.split()[1]
+        matching_qcm = [q for q in qcm_rate_cols if mat in q]
+        if matching_qcm:
+            qcm_col = matching_qcm[0]
+            pv_mean = df[pv_col].mean()
+            qcm_mean = df[qcm_col].mean()
+            if pv_mean:
+                deviation = round((qcm_mean - pv_mean) / pv_mean * 100, 2)
+                deviations[f"{mat} QCM vs PV [%]"] = deviation
+
+    if deviations:
+        results["QCM-PV Rate Deviations [%]"] = deviations
 
     st.subheader("🧪 Extracted Results")
     st.json(results)
@@ -89,13 +127,18 @@ if uploaded_file is not None:
         st.subheader("🧮 Selected Element Ratios from QCM at%")
         st.json(results["Element Ratios from QCM at%"])
 
+    # Abweichungen zwischen PV und QCM Rate
+    if "QCM-PV Rate Deviations [%]" in results:
+        st.subheader("📏 QCM vs PV Rate Deviations")
+        st.json(results["QCM-PV Rate Deviations [%]"])
+
     # Optional Zeitreihen-Plot
     with st.expander("📉 Time Series Plot"):
-        ts_raw = results.get("Time Series Raw")
-        ts_filtered = results.get("Time Series Filtered")
+        ts_raw = results.get("Time Series Raw", df)
+        ts_filtered = results.get("Time Series Filtered", df)
         if ts_raw is not None:
             use_filtered = st.checkbox("Only show shutter open phase (filtered)", value=False)
-            ts_df = ts_filtered if use_filtered else ts_raw
+            ts_df = ts_filtered.copy() if use_filtered else ts_raw.copy()
 
             variables = [col for col in ts_df.columns if col != "time_seconds"]
             st.write("Select multiple variables per subplot (4 plots total):")

@@ -199,18 +199,5 @@ def process_log_dataframe_dynamic(df, metadata=None):
     results["Time Series Raw"] = df.copy()
     results["Time Series Filtered"] = filtered_df.copy()
 
-    for col in df.columns:
-        if col.startswith("QCM RATET1") and col.split()[-1] in ordered_materials:
-            material = col.split()[-1]
-            rate_nm_s = df[col]  # [nm/s]
-            props = MATERIAL_PROPERTIES.get(material)
-            if props:
-                rho = props['density']
-                M = props['molar_mass']
-                rate_nmol_s = rate_nm_s * 1e-7 * rho / M * AVOGADRO * 1e9  # [nmol/s]
-                df[f"QCM RATE {material} nmol_s"] = rate_nmol_s
-
-
-
     return {**metadata, **results}
 
