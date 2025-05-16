@@ -66,27 +66,25 @@ if uploaded_file is not None:
             ax1.set_title("Elemental Composition")
             st.pyplot(fig1)
 
-    # Plot: PV-based target ratios vs. QCM-based measured ratios
-    with col2:
-        st.subheader("⚖️ Target vs Measured Ratios")
-        target = results.get("Target Composition (from PV)", {})
-        measured = results.get("Measured Composition (from TSP)", {})
-        qcm_ratios = results.get("Deviation (QCM at% vs PV ratios)", {})
+        with st.expander("⚖️ Target vs Measured Ratios", expanded=False):
+            target = results.get("Target Composition (from PV)", {})
+            measured = results.get("Measured Composition (from TSP)", {})
+            qcm_ratios = results.get("Deviation (QCM at% vs PV ratios)", {})
 
-        ratio_labels = list(set(target.keys()).union(measured.keys()).union(qcm_ratios.keys()))
-        target_vals = [target.get(k, 0) for k in ratio_labels]
-        measured_vals = [measured.get(k, 0) for k in ratio_labels]
+            ratio_labels = list(set(target.keys()).union(measured.keys()).union(qcm_ratios.keys()))
+            target_vals = [target.get(k, 0) for k in ratio_labels]
+            measured_vals = [measured.get(k, 0) for k in ratio_labels]
 
-        fig2, ax2 = plt.subplots(figsize=(5, 3))
-        x = range(len(ratio_labels))
-        ax2.bar(x, target_vals, width=0.25, label='Target (PV)', align='center')
-        ax2.bar([i + 0.25 for i in x], measured_vals, width=0.25, label='Measured (TSP)', align='center')
-        ax2.set_xticks([i + 0.25/2 for i in x])
-        ax2.set_xticklabels(ratio_labels, rotation=45)
-        ax2.set_ylabel("Ratio")
-        ax2.set_title("Ratio Comparison")
-        ax2.legend()
-        st.pyplot(fig2)
+            fig2, ax2 = plt.subplots(figsize=(5, 3))
+            x = range(len(ratio_labels))
+            ax2.bar(x, target_vals, width=0.25, label='Target (PV)', align='center')
+            ax2.bar([i + 0.25 for i in x], measured_vals, width=0.25, label='Measured (TSP)', align='center')
+            ax2.set_xticks([i + 0.25/2 for i in x])
+            ax2.set_xticklabels(ratio_labels, rotation=45)
+            ax2.set_ylabel("Ratio")
+            ax2.set_title("Ratio Comparison")
+            ax2.legend()
+            st.pyplot(fig2)
 
     # Additional ratios from QCM at%
     if "Element Ratios from QCM at%" in results:
@@ -102,11 +100,19 @@ if uploaded_file is not None:
             ts_df = ts_filtered if use_filtered else ts_raw
 
             variables = [col for col in ts_df.columns if col != "time_seconds"]
-            selected = st.multiselect("Select variables to plot", variables)
-            if selected:
-                fig, ax = plt.subplots(figsize=(8, 3))
-                for var in selected:
-                    ax.plot(ts_df["time_seconds"], ts_df[var], label=var)
-                ax.set_xlabel("Time (s)")
-                ax.legend()
-                st.pyplot(fig)
+            st.write("Select up to 4 variables to plot (one per subplot):")
+            selected_vars = [
+                st.selectbox(f"Y-axis variable for plot {i+1}", [""] + variables, key=f"var{i}")
+                for i in range(4)
+            ]
+
+            fig, axs = plt.subplots(2, 2, figsize=(10, 6))
+            axs = axs.flatten()
+            for i, var in enumerate(selected_vars):
+                if var:
+                    axs[i].plot(ts_df["time_seconds"], ts_df[var], label=var)
+                    axs[i].set_title(var)
+                    axs[i].set_xlabel("Time (s)")
+                    axs[i].legend()
+            plt.tight_layout()
+            st.pyplot(fig)
