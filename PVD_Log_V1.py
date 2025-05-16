@@ -2,17 +2,48 @@ import streamlit as st
 import pandas as pd
 from log_parser import process_log_dataframe_dynamic
 import matplotlib.pyplot as plt
-from log_parser import load_log_csv
 
 st.set_page_config(page_title="Log File Analysis", layout="wide")
 st.title("📊 Thin Film Process Log Analysis")
 
 uploaded_file = st.file_uploader("Upload log file (.csv)", type="csv")
 
-import tempfile
+def load_log_csv(path_or_buffer):
+    """
+    Läd eine PVD-Logdatei mit Kommentar-Header und tab-separierten Daten.
+    Gibt (df, metadata) zurück.
+    """
+    import datetime
+
+    metadata = {}
+    with open(path_or_buffer, 'r', encoding='utf-8') as fh:
+        line = fh.readline().strip()
+
+        # Lies Metadaten
+        while line.startswith('#'):
+            if ':' in line:
+                key = line.split(':')[0][1:].strip()
+                value = str.join(':', line.split(':')[1:]).strip()
+                metadata[key] = value
+            line = fh.readline().strip()
+
+        # Lese restliche Datei mit pandas
+        df = pd.read_csv(fh, sep='\t')
+
+    # Versuche Zeitinformationen zu kombinieren
+    if 'Date' in metadata and 'Time' in df.columns:
+        try:
+            start_time = datetime.datetime.strptime(f'{metadata["Date"]}T{df["Time"].values[0]}', '%Y/%m/%dT%H:%M:%S')
+            end_time = datetime.datetime.strptime(f'{metadata["Date"]}T{df["Time"].values[-1]}', '%Y/%m/%dT%H:%M:%S')
+            metadata['Start Time'] = str(start_time)
+            metadata['End Time'] = str(end_time)
+        except Exception as e:
+            metadata['TimeParseError'] = str(e)
+
+    return df, metadata
 
 if uploaded_file is not None:
-    # Zwischenspeichern
+    import tempfile
     with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
         tmp.write(uploaded_file.getvalue())
         tmp_path = tmp.name
@@ -20,19 +51,9 @@ if uploaded_file is not None:
     df, metadata = load_log_csv(tmp_path)
     results = process_log_dataframe_dynamic(df, metadata=metadata)
 
-
-    st.subheader("📁 Raw Data Preview")
-    st.write(metadata)
-    st.dataframe(df.head())
-
-    with st.spinner("Processing data..."):
-        results = process_log_dataframe_dynamic(df)
-
     st.subheader("🧪 Extracted Results")
     st.json(results)
 
-    # Plot: Element composition (at%)
-    st.subheader("Extracted Results")
     # Plot: Element composition (at%)
     col1, col2 = st.columns(2)
     if "QCM at%" in results:
@@ -60,12 +81,32 @@ if uploaded_file is not None:
         x = range(len(ratio_labels))
         ax2.bar(x, target_vals, width=0.25, label='Target (PV)', align='center')
         ax2.bar([i + 0.25 for i in x], measured_vals, width=0.25, label='Measured (TSP)', align='center')
-        ax2.set_xticks([i + 0.25 / 2 for i in x])
+        ax2.set_xticks([i + 0.25/2 for i in x])
         ax2.set_xticklabels(ratio_labels, rotation=45)
         ax2.set_ylabel("Ratio")
         ax2.set_title("Ratio Comparison")
         ax2.legend()
         st.pyplot(fig2)
 
-st.subheader("🧮 Selected Element Ratios from QCM at%")
-st.json(results.get("Element Ratios from QCM at%", {}))
+    # Additional ratios from QCM at%
+    if "Element Ratios from QCM at%" in results:
+        st.subheader("🧮 Selected Element Ratios from QCM at%")
+        st.json(results["Element Ratios from QCM at%"])
+
+    # Optional Zeitreihen-Plot
+    with st.expander("📉 Time Series Plot"):
+        ts_raw = results.get("Time Series Raw")
+        ts_filtered = results.get("Time Series Filtered")
+        if ts_raw is not None:
+            use_filtered = st.checkbox("Only show shutter open phase (filtered)", value=False)
+            ts_df = ts_filtered if use_filtered else ts_raw
+
+            variables = [col for col in ts_df.columns if col != "time_seconds"]
+            selected = st.multiselect("Select variables to plot", variables)
+            if selected:
+                fig, ax = plt.subplots(figsize=(8, 3))
+                for var in selected:
+                    ax.plot(ts_df["time_seconds"], ts_df[var], label=var)
+                ax.set_xlabel("Time (s)")
+                ax.legend()
+                st.pyplot(fig)

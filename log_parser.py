@@ -1,5 +1,3 @@
-# neue logik
-
 """
 log_parser.py — Modul zur Konvertierung und Auswertung von Log-Dateien
 Dynamische Extraktion von Prozessdaten, QCM-Dicken, Mittelwerten und Verhältnissen.
@@ -19,43 +17,6 @@ MATERIAL_PROPERTIES = {
     'CsBr':  {'density': 4.43, 'molar_mass': 292.81, 'stoichiometry': {'Cs': 1, 'Br': 1}}
 }
 
-import pandas as pd
-from io import StringIO
-
-def load_log_csv(path_or_buffer):
-    """
-    Läd eine PVD-Logdatei mit Kommentar-Header und tab-separierten Daten.
-    Gibt (df, metadata) zurück.
-    """
-    import datetime
-
-    metadata = {}
-    with open(path_or_buffer, 'r', encoding='utf-8') as fh:
-        line = fh.readline().strip()
-
-        # Lies Metadaten
-        while line.startswith('#'):
-            if ':' in line:
-                key = line.split(':')[0][1:].strip()
-                value = str.join(':', line.split(':')[1:]).strip()
-                metadata[key] = value
-            line = fh.readline().strip()
-
-        # Lese restliche Datei mit pandas
-        df = pd.read_csv(fh, sep='\t')
-
-    # Versuche Zeitinformationen zu kombinieren
-    if 'Date' in metadata and 'Time' in df.columns:
-        try:
-            start_time = datetime.datetime.strptime(f'{metadata["Date"]}T{df["Time"].values[0]}', '%Y/%m/%dT%H:%M:%S')
-            end_time = datetime.datetime.strptime(f'{metadata["Date"]}T{df["Time"].values[-1]}', '%Y/%m/%dT%H:%M:%S')
-            metadata['Start Time'] = str(start_time)
-            metadata['End Time'] = str(end_time)
-        except Exception as e:
-            metadata['TimeParseError'] = str(e)
-
-    return df, metadata
-
 
 
 
@@ -70,21 +31,14 @@ def extract_materials(df):
     return materials
 
 def map_qcm_thickness_columns(df, ordered_materials):
-    """
-    Mappe die generischen QCM-Spalten zu Materialien basierend auf der Zuordnung:
-    Quelle 1 → QCM1 C_THIK_1
-    Quelle 2 → QCM2 C_THIK_2
-    Quelle 3 → QCM2 C_THIK_1
-    Quelle 4 → QCM1 C_THIK_2
-    """
     mapping = {}
-    qcm_order = [
-        'QCM1 C_THIK_1',  # Quelle 1
-        'QCM2 C_THIK_2',  # Quelle 2
-        'QCM2 C_THIK_1',  # Quelle 3
-        'QCM1 C_THIK_2'   # Quelle 4
+    qcm_columns = [
+        'QCM1 C_THIK_1',
+        'QCM1 C_THIK_2',
+        'QCM2 C_THIK_1',
+        'QCM2 C_THIK_2'
     ]
-    for col, material in zip(qcm_order, ordered_materials):
+    for col, material in zip(qcm_columns, ordered_materials):
         if col in df.columns:
             mapping[col] = f"QCM Thickness {material}"
     return mapping
@@ -210,24 +164,6 @@ def process_log_dataframe_dynamic(df, metadata=None):
     # Berechne Atomprozente aus QCM-Dicken
     results['QCM at%'] = convert_thickness_to_at_percent(thickness_dict)
 
-    # Zusätzliche Elementverhältnisse aus at%
-    def safe_div(n, d):
-        return round(n / d, 3) if d else np.nan
-
-    qcm_at_percent = results['QCM at%']
-
-    cs = qcm_at_percent.get('Cs', 0)
-    sn = qcm_at_percent.get('Sn', 0)
-    pb = qcm_at_percent.get('Pb', 0)
-    br = qcm_at_percent.get('Br', 0)
-    i = qcm_at_percent.get('I', 0)
-
-    element_ratios = {
-        'Cs/(Sn+Pb)': safe_div(cs, sn + pb),
-        'Br/(Br+I)': safe_div(br, br + i)
-    }
-    results['Element Ratios from QCM at%'] = element_ratios
-
     process_time = (filtered_df['time_seconds'].max() - filtered_df['time_seconds'].min()) / 60
     results['Process_time'] = (round(process_time, 2), 'min')
 
@@ -242,4 +178,9 @@ def process_log_dataframe_dynamic(df, metadata=None):
             comparison[f'delta_{key}'] = round(m - t, 2)
     results['Deviation (QCM at% vs PV ratios)'] = comparison
 
+        # Speichere Zeitreihen (ungefiltert und gefiltert) zur optionalen Visualisierung
+    results["Time Series Raw"] = df.copy()
+    results["Time Series Filtered"] = filtered_df.copy()
+
     return {**metadata, **results}
+
