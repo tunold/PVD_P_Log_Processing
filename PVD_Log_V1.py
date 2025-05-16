@@ -22,6 +22,7 @@ if uploaded_file is not None:
 
 
     st.subheader("📁 Raw Data Preview")
+    st.write(metadata)
     st.dataframe(df.head())
 
     with st.spinner("Processing data..."):

@@ -70,14 +70,21 @@ def extract_materials(df):
     return materials
 
 def map_qcm_thickness_columns(df, ordered_materials):
+    """
+    Mappe die generischen QCM-Spalten zu Materialien basierend auf der Zuordnung:
+    Quelle 1 → QCM1 C_THIK_1
+    Quelle 2 → QCM2 C_THIK_2
+    Quelle 3 → QCM2 C_THIK_1
+    Quelle 4 → QCM1 C_THIK_2
+    """
     mapping = {}
-    qcm_columns = [
-        'QCM1 C_THIK_1',
-        'QCM1 C_THIK_2',
-        'QCM2 C_THIK_1',
-        'QCM2 C_THIK_2'
+    qcm_order = [
+        'QCM1 C_THIK_1',  # Quelle 1
+        'QCM2 C_THIK_2',  # Quelle 2
+        'QCM2 C_THIK_1',  # Quelle 3
+        'QCM1 C_THIK_2'   # Quelle 4
     ]
-    for col, material in zip(qcm_columns, ordered_materials):
+    for col, material in zip(qcm_order, ordered_materials):
         if col in df.columns:
             mapping[col] = f"QCM Thickness {material}"
     return mapping
