@@ -3,6 +3,7 @@ import pandas as pd
 from log_parser import process_log_dataframe_dynamic
 import matplotlib.pyplot as plt
 from itertools import islice
+import numpy as np
 
 st.set_page_config(page_title="Log File Analysis", layout="wide")
 st.title("📊 Thin Film Process Log Analysis")
@@ -60,32 +61,107 @@ if uploaded_file is not None:
     df = results.get("Time Series Raw", df)
     results["Time Series Raw"] = df  # aktualisierte Spalten wieder zurückschreiben
 
-    # Compute target elemental composition and ratios from PV
+    # Compute elemental composition and ratios from TSP
     element_keys = ["Cs", "Sn", "Pb", "I", "Br"]
-    pv_cols = [col for col in df.columns if col.endswith("PV")]
-    element_totals = {el: 0.0 for el in element_keys}
-    for col in pv_cols:
+    tsp_cols = [col for col in df.columns if col.endswith("TSP")]
+    tsp_totals = {el: 0.0 for el in element_keys}
+    for col in tsp_cols:
         for el in element_keys:
             if el in col:
-                element_totals[el] += df[col].mean()
-    total_atoms = sum(element_totals.values())
-    if total_atoms > 0:
-        element_at_percent = {k: round(v / total_atoms * 100, 2) for k, v in element_totals.items()}
-        results["Elemental Composition (from PV)"] = element_at_percent
-        # Calculate target ratios
-        A = element_totals.get("Cs", 0)
-        B = element_totals.get("Sn", 0) + element_totals.get("Pb", 0)
-        I = element_totals.get("I", 0)
-        Br = element_totals.get("Br", 0)
+                tsp_totals[el] += df[col].mean()
+    tsp_sum = sum(tsp_totals.values())
+    if tsp_sum > 0:
+        element_tsp_at = {k: round(v / tsp_sum * 100, 2) for k, v in tsp_totals.items()}
+        results["Elemental Composition (from TSP)"] = element_tsp_at
+        A = tsp_totals.get("Cs", 0)
+        B = tsp_totals.get("Sn", 0) + tsp_totals.get("Pb", 0)
+        I = tsp_totals.get("I", 0)
+        Br = tsp_totals.get("Br", 0)
         if B > 0:
-            results["Target Composition (from PV)"] = {
+            results["Measured Composition (from TSP)"] = {
                 "Cs/(Sn+Pb)": round(A / B, 2),
-                "Sn/(Sn+Pb)": round(element_totals.get("Sn", 0) / B, 2),
+                "Sn/(Sn+Pb)": round(tsp_totals.get("Sn", 0) / B, 2),
                 "Br/(Br+I)": round(Br / (Br + I), 2) if (Br + I) > 0 else 0.0
             }
 
+    # Fixed 2x2 plot of TSP, PV, Aout with deviation highlighting
+    with st.expander("📉 TSP vs PV vs Aout (per source)", expanded=False):
+        source_ids = ["PbI2", "CsI", "CsBr", "SnI2"]
+        fig, axs = plt.subplots(2, 2, figsize=(10, 6), sharex=True)
+        axs = axs.flatten()
+        for i, source in enumerate(source_ids):
+            tsp_col = next((c for c in df.columns if source in c and "TSP" in c), None)
+            pv_col = next((c for c in df.columns if source in c and "PV" in c), None)
+            aout_col = next((c for c in df.columns if source in c and "Aout" in c), None)
+
+            if tsp_col and pv_col and aout_col:
+                ax = axs[i]
+                ax.plot(df["time_seconds"], df[tsp_col], label="TSP")
+                ax.plot(df["time_seconds"], df[pv_col], label="PV")
+                ax.plot(df["time_seconds"], df[aout_col], label="Aout")
+                ax.set_ylim(-0.1, 1.5)
+                ax.set_title(source)
+                ax.set_xlabel("Time (s)")
+                ax.legend()
+                # Hintergrund färben bei Abweichung > 30% während Shutter offen
+                shutter_open = df["Shutter ShutterAngle0..1"] > 45
+                if shutter_open.any():
+                    pv_open = df.loc[shutter_open, pv_col]
+                    tsp_open = df.loc[shutter_open, tsp_col]
+                    deviation_series = abs(pv_open - tsp_open) / tsp_open.replace(0, np.nan)
+                    deviation_mean = deviation_series.mean()
+                    if deviation_mean > 0.3:
+                        ax.set_facecolor("#ffe6e6")  # hellrot
+
+                    # Berechne Mittelwerte während Shutter offen
+                if shutter_open.any():
+                    pv_mean = df.loc[shutter_open, pv_col].mean()
+                    tsp_mean = df[tsp_col].mean()
+                    if tsp_mean != 0:
+                        deviation_pct = 100 * (pv_mean - tsp_mean) / tsp_mean
+                        deviation_str = f"Δ = {deviation_pct:+.1f}%"
+                    else:
+                        deviation_str = "Δ = n/a"
+                    text_str = f"TSP: {tsp_mean:.2f} PV: {pv_mean: .2f} {deviation_str}"
+                    ax.text(0.02, 0.98, text_str, transform=ax.transAxes,
+                            verticalalignment='top', fontsize=8,
+                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
 
 
+
+        plt.tight_layout()
+        st.pyplot(fig)
+
+
+    # Display TSP settings, compositions, ratios, and totals in table
+    with st.expander("📋 Process Overview Table", expanded=True):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("**🎯 Target Composition from TSP**")
+            st.write(results.get("Elemental Composition (from TSP)", {}))
+            st.markdown("**Target Ratios**")
+            st.write(results.get("Measured Composition (from TSP)", {}))
+
+            st.markdown("**⚙️ TSP Setpoints (nmol/s)**")
+            tsp_means = {col: round(df[col].mean(), 3) for col in tsp_cols}
+            st.write(tsp_means)
+
+        with col2:
+            st.markdown("**📏 QCM Composition (from Thickness)**")
+            st.write(results.get("QCM at%", {}))
+            st.markdown("**Measured Ratios from QCM**")
+            st.write(results.get("Element Ratios from QCM at%", {}))
+
+            total_thickness = results.get("Total_thickness", (0,))[0]
+            process_time = results.get("Process_time", (0,))[0]
+            rate = total_thickness / (process_time * 60) if process_time else 0
+            st.markdown("**🕒 Deposition Summary**")
+            st.write({
+                "Deposition Time (min)": round(process_time, 1),
+                "Total Thickness (nm)": round(total_thickness, 1),
+                "Deposition Rate (nm/s)": round(rate, 3)
+            })
 
     # QCM-RATET1_x in nmol/s berechnen
     for col in df.columns:
