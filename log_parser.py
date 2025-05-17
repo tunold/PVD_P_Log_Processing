@@ -10,11 +10,17 @@ import re
 AVOGADRO = 6.022e23
 
 # Materialdaten: Dichte [g/cm^3], Molmasse [g/mol], Stöchiometrie {Element: Anzahl}
+
+d_factor_PbI2 = 1.0
+d_factor_CsI = 0.94
+d_factor_SnI2 = 0.92
+d_factor_CsBr = 1.18
+
 MATERIAL_PROPERTIES = {
-    'PbI2':  {'density': 6.16, 'molar_mass': 461.0,  'stoichiometry': {'Pb': 1, 'I': 2}},
-    'CsI':   {'density': 4.51, 'molar_mass': 259.81, 'stoichiometry': {'Cs': 1, 'I': 1}},
-    'SnI2':  {'density': 5.32, 'molar_mass': 372.52, 'stoichiometry': {'Sn': 1, 'I': 2}},
-    'CsBr':  {'density': 4.43, 'molar_mass': 292.81, 'stoichiometry': {'Cs': 1, 'Br': 1}}
+    'PbI2':  {'density': 6.16*d_factor_PbI2, 'molar_mass': 461.0,  'stoichiometry': {'Pb': 1, 'I': 2}},
+    'CsI':   {'density': 4.51*d_factor_CsI, 'molar_mass': 259.81, 'stoichiometry': {'Cs': 1, 'I': 1}},
+    'SnI2':  {'density': 5.32*d_factor_SnI2, 'molar_mass': 372.52, 'stoichiometry': {'Sn': 1, 'I': 2}},
+    'CsBr':  {'density': 4.43*d_factor_CsBr, 'molar_mass': 292.81, 'stoichiometry': {'Cs': 1, 'Br': 1}}
 }
 
 

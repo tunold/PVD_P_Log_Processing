@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from log_parser import process_log_dataframe_dynamic
 import matplotlib.pyplot as plt
+from itertools import islice
 
 st.set_page_config(page_title="Log File Analysis", layout="wide")
 st.title("📊 Thin Film Process Log Analysis")
@@ -49,6 +50,12 @@ if uploaded_file is not None:
         tmp_path = tmp.name
 
     df, metadata = load_log_csv(tmp_path)
+
+    # Skaliere alle Aout-Werte zur besseren Darstellung
+    for col in df.columns:
+        if "Aout" in col:
+            df[col] = df[col] / 100
+
     results = process_log_dataframe_dynamic(df, metadata=metadata)
     df = results.get("Time Series Raw", df)
     results["Time Series Raw"] = df  # aktualisierte Spalten wieder zurückschreiben
@@ -68,7 +75,10 @@ if uploaded_file is not None:
                 M = props['molar_mass']
                 rate_nmol_s = rate_nm_s * 1e-7 * rho / M * 1e9 #* AVOGADRO   # [nmol/s]
                 df[f"QCM RATE {material} nmol_s"] = rate_nmol_s
-    df = results.get("Time Series Raw", df)
+
+    results["Time Series Raw"] = df.copy()  # wichtig, damit auch neue Spalten erhalten bleiben!
+
+    #df = results.get("Time Series Raw", df)
 
 
     # PV vs. QCM-Rate Abweichung berechnen
@@ -90,7 +100,65 @@ if uploaded_file is not None:
         results["QCM-PV Rate Deviations [%]"] = deviations
 
     st.subheader("🧪 Extracted Results")
-    st.json(results)
+    # Get the first key-value pair
+    # Get the first 5 key-value pairs
+    first_five = dict(islice(results.items(), 7))
+
+    # Display the result
+    for key, value in first_five.items():
+        st.write(f"{key}:    {value}")
+
+    st.subheader("🧪 Summary Table")
+    import numpy as np
+
+    summary_data = []
+
+    # (1) Target composition
+    target_comp = results.get("Target Composition (from PV)", {})
+    target_at = results.get("Elemental Composition (from PV)", {})
+    summary_data.append(["Target Composition (PV)", "", ""])
+    for el, val in target_at.items():
+        summary_data.append(["", f"{el} at%", val])
+    for ratio, val in target_comp.items():
+        summary_data.append(["", f"{ratio}", val])
+
+    # (2) Measured QCM composition
+    qcm_at = results.get("QCM at%", {})
+    qcm_ratios = results.get("Element Ratios from QCM at%", {})
+    summary_data.append(["Measured Composition (QCM)", "", ""])
+    for el, val in qcm_at.items():
+        summary_data.append(["", f"{el} at%", val])
+    for ratio, val in qcm_ratios.items():
+        summary_data.append(["", f"{ratio}", val])
+
+    # (3) Time / Thickness
+    t_sec = results.get("Process_time", (0,))[0] * 60  # in seconds
+    total_thickness = results.get("Total_thickness", (0,))[0]
+    rate = total_thickness / t_sec if t_sec else 0
+    summary_data.append(["Process Info", "Time (s)", round(t_sec, 1)])
+    summary_data.append(["", "Total Thickness (nm)", round(total_thickness, 1)])
+    summary_data.append(["", "Deposition Rate (nm/s)", round(rate, 3)])
+
+    # (4) QCM XLIFE min/max per QCM
+    qcm_life = {k: v for k, v in df.items() if "QCM XLIFE" in k}
+    for k, v in qcm_life.items():
+        summary_data.append(["QCM Lifetime", f"{k} min", round(np.nanmin(v), 1)])
+        summary_data.append(["", f"{k} max", round(np.nanmax(v), 1)])
+
+    # (5) Source Power min/max (Aout)
+    aout_cols = [col for col in df.columns if "Aout" in col and "Substrate" not in col]
+    for col in aout_cols:
+        summary_data.append(["Source Power", f"{col} min", round(df[col].min(), 2)])
+        summary_data.append(["", f"{col} max", round(df[col].max(), 2)])
+
+    # (6) Pressure min/max
+    for p_col in ["Vacuum Pressure1", "Vacuum Pressure2"]:
+        summary_data.append(["Vacuum", f"{p_col} min", round(df[p_col].min(), 3)])
+        summary_data.append(["", f"{p_col} max", round(df[p_col].max(), 3)])
+
+    summary_df = pd.DataFrame(summary_data, columns=["Category", "Parameter", "Value"])
+    st.dataframe(summary_df, use_container_width=True)
+
 
     # Plot: Element composition (at%)
     if "QCM at%" in results:
@@ -158,3 +226,70 @@ if uploaded_file is not None:
                     axs[i].legend()
             plt.tight_layout()
             st.pyplot(fig)
+
+    # Vergleich QCM-Rate vs PV (automatisch)
+    with st.expander("📐 QCM RATE vs PV (auto)", expanded=False):
+        fig_cmp, axs_cmp = plt.subplots(2, 2, figsize=(10, 6), sharex=True, sharey=True)
+        axs_cmp = axs_cmp.flatten()
+
+        qcm_pv_pairs = []
+        # finde alle QCM RATE-Spalten mit Materialnamen
+        for col in df.columns:
+            if col.startswith("QCM RATE") and col.endswith("nmol_s"):
+                mat = col.replace("QCM RATE ", "").replace(" nmol_s", "")
+                # finde passende PV-Spalte, z. B. '1 - PbI2 PV'
+                pv_matches = [c for c in df.columns if c.endswith(" PV") and mat in c]
+                if pv_matches:
+                    qcm_pv_pairs.append((mat, col, pv_matches[0]))
+
+        #st.write("Spaltenübersicht:", df.columns.tolist())
+        for i, (mat, qcm_col, pv_col) in enumerate(qcm_pv_pairs[:4]):
+            qcm_values = df[qcm_col]
+            pv_values = df[pv_col]
+            axs_cmp[i].plot(df["time_seconds"], qcm_values, label=f"QCM RATE {mat}")
+            axs_cmp[i].plot(df["time_seconds"], pv_values, '--', label=f"{mat} PV", color='red')
+
+            deviation = (qcm_values.mean() - pv_values.mean()) / max(pv_values.mean(), 1e-6)
+            if abs(deviation) > 0.2:
+                axs_cmp[i].set_facecolor('#ffe6e6')  # hellrot bei >20% Abweichung
+            elif abs(deviation) > 0.1:
+                axs_cmp[i].set_facecolor('#fff5cc')  # hellgelb bei >10%
+
+            axs_cmp[i].set_title(mat)
+            axs_cmp[i].set_xlabel("Time (s)")
+            axs_cmp[i].set_ylim(-0.05,1.5)
+            axs_cmp[i].legend()
+            axs_cmp[i].text(0.98, 0.02, f"{deviation * 100:.1f} %", transform=axs_cmp[i].transAxes,
+                            fontsize=8, ha='right', va='bottom',
+                            bbox=dict(facecolor='white', edgecolor='gray', boxstyle='round,pad=0.3'))
+
+        plt.tight_layout()
+        st.pyplot(fig_cmp)
+
+# 🔧 Element Composition Vergleich + TSP-Korrektur
+    with st.expander("🧪 Adjust TSP Based on Measured Composition", expanded=False):
+        st.markdown("Gebe die gemessene Elementzusammensetzung in at% ein:")
+        elements = ['Cs', 'Sn', 'Pb', 'I', 'Br']
+        measured_input = {el: st.number_input(f"{el} at%", min_value=0.0, max_value=100.0, value=0.0, step=0.1) for el in elements}
+
+        # Hole TSP-basierte Zusammensetzung
+        tsp_comp = results.get("Measured Composition (from TSP)", {})
+        st.markdown("---")
+        st.markdown("Vergleich mit TSP-basierter Zielvorgabe:")
+        st.json(tsp_comp)
+
+        # Korrektur-Vorschlag
+        if sum(measured_input.values()) > 0:
+            st.markdown("---")
+            st.subheader("💡 TSP-Korrekturvorschlag")
+            corrected = {}
+            scale_factors = {}
+            for el in elements:
+                if el in tsp_comp and measured_input[el] > 0:
+                    scale = tsp_comp[el] / measured_input[el]
+                    corrected[el] = round(scale * 100, 1)
+                    scale_factors[el] = round(scale, 2)
+            st.markdown("**Skalierungsfaktoren für TSP pro Element:**")
+            st.json(scale_factors)
+            st.markdown("**TSP-Korrekturziel (relativ in %):**")
+            st.json(corrected)
