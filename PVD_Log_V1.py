@@ -60,6 +60,33 @@ if uploaded_file is not None:
     df = results.get("Time Series Raw", df)
     results["Time Series Raw"] = df  # aktualisierte Spalten wieder zurückschreiben
 
+    # Compute target elemental composition and ratios from PV
+    element_keys = ["Cs", "Sn", "Pb", "I", "Br"]
+    pv_cols = [col for col in df.columns if col.endswith("PV")]
+    element_totals = {el: 0.0 for el in element_keys}
+    for col in pv_cols:
+        for el in element_keys:
+            if el in col:
+                element_totals[el] += df[col].mean()
+    total_atoms = sum(element_totals.values())
+    if total_atoms > 0:
+        element_at_percent = {k: round(v / total_atoms * 100, 2) for k, v in element_totals.items()}
+        results["Elemental Composition (from PV)"] = element_at_percent
+        # Calculate target ratios
+        A = element_totals.get("Cs", 0)
+        B = element_totals.get("Sn", 0) + element_totals.get("Pb", 0)
+        I = element_totals.get("I", 0)
+        Br = element_totals.get("Br", 0)
+        if B > 0:
+            results["Target Composition (from PV)"] = {
+                "Cs/(Sn+Pb)": round(A / B, 2),
+                "Sn/(Sn+Pb)": round(element_totals.get("Sn", 0) / B, 2),
+                "Br/(Br+I)": round(Br / (Br + I), 2) if (Br + I) > 0 else 0.0
+            }
+
+
+
+
     # QCM-RATET1_x in nmol/s berechnen
     for col in df.columns:
         if col.startswith("QCM RATET1") and col.split()[-1] in df.columns:
