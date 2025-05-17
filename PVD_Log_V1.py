@@ -112,7 +112,7 @@ if uploaded_file is not None:
     # TSP vs PV Summary Table
     with st.expander("📊 TSP vs PV Summary Table", expanded=True):
         rows = ["PbI2", "CsI", "CsBr", "SnI2", "Cs", "Sn", "Pb", "I", "Br", "Cs/(Sn+Pb)", "Sn/(Sn+Pb)", "Br/(Br+I)"]
-        data = {"Name": rows, "TSP": [], "PV": []}
+        data = {"Name": rows, "TSP": [], "PV": [], "QCM": []}
 
         # Mittelwerte für Materialien
         pv_cols = [col for col in df.columns if col.endswith("PV")]
@@ -140,6 +140,9 @@ if uploaded_file is not None:
             pv_val = get_mean(next((c for c in pv_cols if mat in c), ""), use_filter=True)
             data["TSP"].append(round(tsp_val, 3))
             data["PV"].append(round(pv_val, 3))
+            thickness_dict = results.get("QCM Recorded Thickness", {})
+            qcm_val = next((v[0] for k, v in thickness_dict.items() if mat in k), 0.0)
+            data["QCM"].append(round(qcm_val, 1))
 
         # Elemente und Verhältnisse (TSP + PV at%)
         for el in ["Cs", "Sn", "Pb", "I", "Br"]:
@@ -147,12 +150,14 @@ if uploaded_file is not None:
             pv_val = results.get("Elemental Composition (from PV)", {}).get(el, 0.0)
             data["TSP"].append(round(tsp_val, 2))
             data["PV"].append(round(pv_val, 2))
+            data["QCM"].append(round(qcm_val, 2))
 
         for r in ["Cs/(Sn+Pb)", "Sn/(Sn+Pb)", "Br/(Br+I)"]:
             tsp_val = results.get("Measured Composition (from TSP)", {}).get(r, 0.0)
             pv_val = results.get("Target Composition (from PV)", {}).get(r, 0.0)
             data["TSP"].append(round(tsp_val, 2))
             data["PV"].append(round(pv_val, 2))
+            data["QCM"].append(round(qcm_val, 2))
 
         comp_df = pd.DataFrame(data)
         comp_df["% Deviation"] = ((comp_df["PV"] - comp_df["TSP"]) / comp_df["TSP"]).round(3) * 100
