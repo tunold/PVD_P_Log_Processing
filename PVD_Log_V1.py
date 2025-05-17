@@ -4,6 +4,7 @@ from log_parser import process_log_dataframe_dynamic
 import matplotlib.pyplot as plt
 from itertools import islice
 import numpy as np
+import plotly.graph_objects as go
 
 st.set_page_config(page_title="Log File Analysis", layout="wide")
 st.title("📊 Thin Film Process Log Analysis")
@@ -62,7 +63,30 @@ if uploaded_file is not None:
     results["Time Series Raw"] = df  # aktualisierte Spalten wieder zurückschreiben
 
     # Compute elemental composition and ratios from TSP
+    # Compute elemental composition and ratios from PV during shutter open
     element_keys = ["Cs", "Sn", "Pb", "I", "Br"]
+    pv_totals = {el: 0.0 for el in element_keys}
+    pv_cols = [col for col in df.columns if col.endswith("PV")]
+    shutter_open = df["Shutter ShutterAngle0..1"] > 45
+    for col in pv_cols:
+        for el in element_keys:
+            if el in col:
+                pv_totals[el] += df.loc[shutter_open, col].mean()
+    pv_sum = sum(pv_totals.values())
+    if pv_sum > 0:
+        element_pv_at = {k: round(v / pv_sum * 100, 2) for k, v in pv_totals.items()}
+        results["Elemental Composition (from PV)"] = element_pv_at
+        A = pv_totals.get("Cs", 0)
+        B = pv_totals.get("Sn", 0) + pv_totals.get("Pb", 0)
+        I = pv_totals.get("I", 0)
+        Br = pv_totals.get("Br", 0)
+        if B > 0:
+            results["Target Composition (from PV)"] = {
+                "Cs/(Sn+Pb)": round(A / B, 2),
+                "Sn/(Sn+Pb)": round(pv_totals.get("Sn", 0) / B, 2),
+                "Br/(Br+I)": round(Br / (Br + I), 2) if (Br + I) > 0 else 0.0
+            }
+    #element_keys = ["Cs", "Sn", "Pb", "I", "Br"]
     tsp_cols = [col for col in df.columns if col.endswith("TSP")]
     tsp_totals = {el: 0.0 for el in element_keys}
     for col in tsp_cols:
@@ -84,6 +108,7 @@ if uploaded_file is not None:
                 "Br/(Br+I)": round(Br / (Br + I), 2) if (Br + I) > 0 else 0.0
             }
 
+    # TSP vs PV Summary Table
     # TSP vs PV Summary Table
     with st.expander("📊 TSP vs PV Summary Table", expanded=True):
         rows = ["PbI2", "CsI", "CsBr", "SnI2", "Cs", "Sn", "Pb", "I", "Br", "Cs/(Sn+Pb)", "Sn/(Sn+Pb)", "Br/(Br+I)"]
@@ -130,7 +155,76 @@ if uploaded_file is not None:
             data["PV"].append(round(pv_val, 2))
 
         comp_df = pd.DataFrame(data)
+        comp_df["% Deviation"] = ((comp_df["PV"] - comp_df["TSP"]) / comp_df["TSP"]).round(3) * 100
+
+        def highlight_deviation(val):
+            if isinstance(val, (int, float)):
+                if abs(val) > 20:
+                    return 'background-color: #ffe6e6'  # red for large deviations
+                elif abs(val) > 10:
+                    return 'background-color: #fff3cd'  # yellow for medium deviations
+            return ''
+
+
+        styled_df = comp_df.style.applymap(highlight_deviation, subset=["% Deviation"])
+        #st.dataframe(styled_df, use_container_width=False, height=500)
         st.dataframe(comp_df, use_container_width=False, height=500)
+
+        # Spalten vorbereiten
+        columns = comp_df.columns.tolist()
+        comp_df = comp_df.fillna("")
+        #values = [comp_df[col].tolist() for col in columns]
+        values = [[str(val) for val in comp_df[col].fillna("")] for col in comp_df.columns]
+
+        fill_colors = []
+        # Zeilen 5–8 markieren (Element-Zeilen)
+        row_indices_element = list(range(4, 9))
+
+        # Spaltennamen
+        columns = comp_df.columns.tolist()
+
+        # Werte als Strings vorbereiten (robust gegen gemischte Typen)
+        values = [[str(val) for val in comp_df[col].fillna("")] for col in columns]
+
+        # Formatierung: ".2f" für Zahlen, sonst None
+        formats = [".2f" if pd.api.types.is_numeric_dtype(comp_df[col]) else None for col in columns]
+
+        # Zellfarben initialisieren
+        fill_colors = []
+        for col in columns:
+            colors = []
+            for idx in range(len(comp_df)):
+                if col == "% Deviation":
+                    val = comp_df[col].iloc[idx]
+                    if abs(val) > 20:
+                        colors.append('#ffe6e6')  # rot
+                    elif abs(val) > 10:
+                        colors.append('#fff3cd')  # gelb
+                    else:
+                        colors.append('#e8f4ff' if idx in row_indices_element else 'white')
+                else:
+                    colors.append('#e8f4ff' if idx in row_indices_element else 'white')
+            fill_colors.append(colors)
+
+        # Plotly-Tabelle
+        fig = go.Figure(data=[go.Table(
+            header=dict(
+                values=[f"<b>{col}</b>" for col in columns],
+                fill_color='lightgrey',
+                align='left',
+                font=dict(size=14, color='black')
+            ),
+            cells=dict(
+                values=values,
+                fill_color=fill_colors,
+                align='left',
+                font=dict(size=13, color='black'),
+                format=formats
+            )
+        )])
+
+        st.plotly_chart(fig, use_container_width=True)
+
 
     # Fixed 2x2 plot of TSP, PV, Aout with deviation highlighting
     with st.expander("📉 TSP vs PV vs Aout (per source)", expanded=False):
