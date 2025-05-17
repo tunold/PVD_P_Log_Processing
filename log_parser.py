@@ -151,6 +151,12 @@ def process_log_dataframe_dynamic(df, metadata=None):
     materials_map = extract_materials(df)
     ordered_materials = [materials_map[k] for k in sorted(materials_map)]
     df.rename(columns=map_qcm_columns(df, ordered_materials), inplace=True)
+    #new fix
+    # Spezielle Umbenennung für QCM C_THIK → QCM Thickness
+    for col in df.columns:
+        if "QCM C_THIK" in col:
+            df.rename(columns={col: col.replace("QCM C_THIK", "QCM Thickness")}, inplace=True)
+    # end fix
 
     T_cols = [f'{num} - {mat} T' for num, mat in materials_map.items()]
     TSP_cols = [f'{num} - {mat} TSP' for num, mat in materials_map.items()]
@@ -180,12 +186,16 @@ def process_log_dataframe_dynamic(df, metadata=None):
 
     qcm_thickness_cols = [col for col in df.columns if 'QCM Thickness' in col]
     max_thickness = filtered_df[qcm_thickness_cols].max() * 100
+    #max_thickness = df[qcm_thickness_cols].max() * 100
+
     thickness_dict = {k: (round(v, 2), 'nm') for k, v in max_thickness.items()}
     results['QCM Recorded Thickness'] = thickness_dict
     results['Total_thickness'] = (round(max_thickness.sum(), 2), 'nm')
 
     # Berechne Atomprozente aus QCM-Dicken
     results['QCM at%'] = convert_thickness_to_at_percent(thickness_dict)
+    # Verhältnisse aus QCM-at.% berechnen
+    results['Element Ratios from QCM at%'] = compute_composition_ratios(results['QCM at%'])
 
     process_time = (filtered_df['time_seconds'].max() - filtered_df['time_seconds'].min()) / 60
     results['Process_time'] = (round(process_time, 2), 'min')

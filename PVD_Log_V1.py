@@ -52,7 +52,7 @@ if uploaded_file is not None:
         tmp_path = tmp.name
 
     df, metadata = load_log_csv(tmp_path)
-
+    metadata["Filename"] = uploaded_file.name
     # Skaliere alle Aout-Werte zur besseren Darstellung
     for col in df.columns:
         if "Aout" in col:
@@ -108,6 +108,48 @@ if uploaded_file is not None:
                 "Br/(Br+I)": round(Br / (Br + I), 2) if (Br + I) > 0 else 0.0
             }
 
+    # QCM-RATET1_x in nmol/s berechnen
+    for col in df.columns:
+        if col.startswith("QCM RATET1") and col.split()[-1] in df.columns:
+            continue  # skip invalid entries
+        if col.startswith("QCM RATET1"):
+            material = col.split()[-1]
+            rate_nm_s = df[col]
+            from log_parser import MATERIAL_PROPERTIES, AVOGADRO
+
+            props = MATERIAL_PROPERTIES.get(material)
+            if props:
+                rho = props['density']
+                M = props['molar_mass']
+                rate_nmol_s = rate_nm_s * 1e-7 * rho / M * 1e9 #* AVOGADRO   # [nmol/s]
+                df[f"QCM RATE {material} nmol_s"] = rate_nmol_s
+
+    results["Time Series Raw"] = df.copy()  # wichtig, damit auch neue Spalten erhalten bleiben!
+
+    #df = results.get("Time Series Raw", df)
+
+
+    # PV vs. QCM-Rate Abweichung berechnen
+    pv_cols = [col for col in df.columns if col.endswith("PV")]
+    qcm_rate_cols = [col for col in df.columns if col.startswith("QCM RATE") and col.endswith("nmol_s")]
+    deviations = {}
+    for pv_col in pv_cols:
+        mat = pv_col.split()[1]
+        matching_qcm = [q for q in qcm_rate_cols if mat in q]
+        if matching_qcm:
+            qcm_col = matching_qcm[0]
+            pv_mean = df[pv_col].mean()
+            qcm_mean = df[qcm_col].mean()
+            if pv_mean:
+                deviation = round((qcm_mean - pv_mean) / pv_mean * 100, 2)
+                deviations[f"{mat} QCM vs PV [%]"] = deviation
+
+    if deviations:
+        results["QCM-PV Rate Deviations [%]"] = deviations
+
+
+    st.dataframe(results)
+
     # TSP vs PV Summary Table
     # TSP vs PV Summary Table
     with st.expander("📊 TSP vs PV Summary Table", expanded=True):
@@ -135,100 +177,155 @@ if uploaded_file is not None:
             "SnI2": "SnI2"
         }
 
+
+
         for mat in ["PbI2", "CsI", "CsBr", "SnI2"]:
             tsp_val = get_mean(next((c for c in tsp_cols if mat in c), ""))
             pv_val = get_mean(next((c for c in pv_cols if mat in c), ""), use_filter=True)
             data["TSP"].append(round(tsp_val, 3))
             data["PV"].append(round(pv_val, 3))
             thickness_dict = results.get("QCM Recorded Thickness", {})
-            qcm_val = next((v[0] for k, v in thickness_dict.items() if mat in k), 0.0)
+            qcm_val = 0.0
+            for k, v in thickness_dict.items():
+                if mat.lower() in k.lower():
+                    qcm_val = v[0]
+                    break
             data["QCM"].append(round(qcm_val, 1))
 
         # Elemente und Verhältnisse (TSP + PV at%)
         for el in ["Cs", "Sn", "Pb", "I", "Br"]:
             tsp_val = results.get("Elemental Composition (from TSP)", {}).get(el, 0.0)
             pv_val = results.get("Elemental Composition (from PV)", {}).get(el, 0.0)
+            qcm_val = results.get("QCM at%", {}).get(el, 0.0)
             data["TSP"].append(round(tsp_val, 2))
             data["PV"].append(round(pv_val, 2))
             data["QCM"].append(round(qcm_val, 2))
 
+
+        # Verhältnisse manuell ausrechnen aus den Dictionaries
+        def calc_ratios(source):
+            A = source.get("Cs", 0)
+            Sn = source.get("Sn", 0)
+            Pb = source.get("Pb", 0)
+            B = Sn + Pb
+            I = source.get("I", 0)
+            Br = source.get("Br", 0)
+            return {
+                "Cs/(Sn+Pb)": round(A / B, 2) if B else 0,
+                "Sn/(Sn+Pb)": round(Sn / B, 2) if B else 0,
+                "Br/(Br+I)": round(Br / (Br + I), 2) if (Br + I) else 0
+            }
+
+        qcm_ratios = calc_ratios(results.get("QCM at%", {}))
+
         for r in ["Cs/(Sn+Pb)", "Sn/(Sn+Pb)", "Br/(Br+I)"]:
             tsp_val = results.get("Measured Composition (from TSP)", {}).get(r, 0.0)
             pv_val = results.get("Target Composition (from PV)", {}).get(r, 0.0)
+            qcm_val = qcm_ratios.get(r, 0.0)
             data["TSP"].append(round(tsp_val, 2))
             data["PV"].append(round(pv_val, 2))
             data["QCM"].append(round(qcm_val, 2))
 
         comp_df = pd.DataFrame(data)
         comp_df["% Deviation"] = ((comp_df["PV"] - comp_df["TSP"]) / comp_df["TSP"]).round(3) * 100
+        # Letzte Zeile: Gesamtdicke
+        total_thickness = results.get("Total_thickness", (0,))[0]
+        thickness_row = {
+            "Name": "Total Thickness",
+            "TSP": np.nan,
+            "PV": np.nan,
+            "QCM": round(total_thickness, 1),
+            "% Deviation": np.nan
+        }
+
+        comp_df = pd.concat([comp_df, pd.DataFrame([thickness_row])], ignore_index=True)
+        comp_df["% Deviation"] = ((comp_df["PV"] - comp_df["TSP"]) / comp_df["TSP"]).round(3) * 100
+        comp_df[["TSP", "PV"]] = comp_df[["TSP", "PV"]].apply(pd.to_numeric, errors="coerce")
+
 
         def highlight_deviation(val):
-            if isinstance(val, (int, float)):
-                if abs(val) > 20:
-                    return 'background-color: #ffe6e6'  # red for large deviations
-                elif abs(val) > 10:
-                    return 'background-color: #fff3cd'  # yellow for medium deviations
+            try:
+                val = float(val)
+            except (ValueError, TypeError):
+                return ''  # Nicht numerisch → keine Farbe
+
+            if abs(val) > 20:
+                return 'background-color: #ffe6e6'  # rot
+            elif abs(val) > 10:
+                return 'background-color: #fff3cd'  # gelb
             return ''
 
 
+        #st.write(results["QCM at%"])
+        #st.write(results["Element Ratios from QCM at%"])
+
         styled_df = comp_df.style.applymap(highlight_deviation, subset=["% Deviation"])
         #st.dataframe(styled_df, use_container_width=False, height=500)
-        st.dataframe(comp_df, use_container_width=False, height=500)
+        select_table = st.selectbox("Choose display mode",["classic dataframe","plotly"])
 
-        # Spalten vorbereiten
-        columns = comp_df.columns.tolist()
-        comp_df = comp_df.fillna("")
-        #values = [comp_df[col].tolist() for col in columns]
-        values = [[str(val) for val in comp_df[col].fillna("")] for col in comp_df.columns]
+        if select_table == "classic dataframe":
+            st.dataframe(comp_df, use_container_width=False, height=500)
+        else:
 
-        fill_colors = []
-        # Zeilen 5–8 markieren (Element-Zeilen)
-        row_indices_element = list(range(4, 9))
+            # Spalten vorbereiten
+            columns = comp_df.columns.tolist()
+            comp_df = comp_df.fillna("")
+            #values = [comp_df[col].tolist() for col in columns]
+            values = [[str(val) for val in comp_df[col].fillna("")] for col in comp_df.columns]
 
-        # Spaltennamen
-        columns = comp_df.columns.tolist()
+            fill_colors = []
+            # Zeilen 5–8 markieren (Element-Zeilen)
+            row_indices_element = list(range(4, 9))
 
-        # Werte als Strings vorbereiten (robust gegen gemischte Typen)
-        values = [[str(val) for val in comp_df[col].fillna("")] for col in columns]
+            # Spaltennamen
+            columns = comp_df.columns.tolist()
 
-        # Formatierung: ".2f" für Zahlen, sonst None
-        formats = [".2f" if pd.api.types.is_numeric_dtype(comp_df[col]) else None for col in columns]
+            # Werte als Strings vorbereiten (robust gegen gemischte Typen)
+            values = [[str(val) for val in comp_df[col].fillna("")] for col in columns]
 
-        # Zellfarben initialisieren
-        fill_colors = []
-        for col in columns:
-            colors = []
-            for idx in range(len(comp_df)):
-                if col == "% Deviation":
-                    val = comp_df[col].iloc[idx]
-                    if abs(val) > 20:
-                        colors.append('#ffe6e6')  # rot
-                    elif abs(val) > 10:
-                        colors.append('#fff3cd')  # gelb
+            # Formatierung: ".2f" für Zahlen, sonst None
+            formats = [".2f" if pd.api.types.is_numeric_dtype(comp_df[col]) else None for col in columns]
+
+            # Zellfarben initialisieren
+            fill_colors = []
+            row_indices_element = list(range(4, 9))  # Zeilen 5–9 (Elemente)
+
+            for col in comp_df.columns:
+                colors = []
+                for idx in range(len(comp_df)):
+                    if col == "% Deviation":
+                        try:
+                            val = float(comp_df[col].iloc[idx])
+                            if abs(val) > 20:
+                                colors.append('#ffe6e6')  # rot
+                            elif abs(val) > 10:
+                                colors.append('#fff3cd')  # gelb
+                            else:
+                                colors.append('#e8f4ff' if idx in row_indices_element else 'white')
+                        except:
+                            colors.append('#e8f4ff' if idx in row_indices_element else 'white')
                     else:
                         colors.append('#e8f4ff' if idx in row_indices_element else 'white')
-                else:
-                    colors.append('#e8f4ff' if idx in row_indices_element else 'white')
-            fill_colors.append(colors)
+                fill_colors.append(colors)
 
-        # Plotly-Tabelle
-        fig = go.Figure(data=[go.Table(
-            header=dict(
-                values=[f"<b>{col}</b>" for col in columns],
-                fill_color='lightgrey',
-                align='left',
-                font=dict(size=14, color='black')
-            ),
-            cells=dict(
-                values=values,
-                fill_color=fill_colors,
-                align='left',
-                font=dict(size=13, color='black'),
-                format=formats
-            )
-        )])
+            # Plotly-Tabelle
+            fig = go.Figure(data=[go.Table(
+                header=dict(
+                    values=[f"<b>{col}</b>" for col in columns],
+                    fill_color='lightgrey',
+                    align='left',
+                    font=dict(size=14, color='black')
+                ),
+                cells=dict(
+                    values=values,
+                    fill_color=fill_colors,
+                    align='left',
+                    font=dict(size=13, color='black'),
+                    format=formats
+                )
+            )])
 
-        st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=False, height=700)
 
 
     # Fixed 2x2 plot of TSP, PV, Aout with deviation highlighting
@@ -279,6 +376,62 @@ if uploaded_file is not None:
         plt.tight_layout()
         st.pyplot(fig)
 
+    with st.expander("🌡️ Source Temperatures (T over time)", expanded=False):
+        fig, axs = plt.subplots(2, 2, figsize=(10, 6), sharex=True)
+        axs = axs.flatten()
+        source_ids = ["PbI2", "CsI", "CsBr", "SnI2"]
+        for i, source in enumerate(source_ids):
+            t_col = next((c for c in df.columns if source in c and " T" in c), None)
+            if t_col:
+                ax = axs[i]
+                ax.plot(df["time_seconds"], df[t_col], label="T")
+                ax.set_title(source)
+                ax.set_xlabel("Time (s)")
+                ax.set_ylabel("T (°C)")
+                ax.legend()
+                ax.set_ylim(0,600)
+        plt.tight_layout()
+        st.pyplot(fig)
+
+    # Vergleich QCM-Rate vs PV (automatisch)
+
+    with st.expander("📐 QCM RATE vs PV (auto) 1", expanded=False):
+        fig_cmp, axs_cmp = plt.subplots(2, 2, figsize=(10, 6), sharex=True, sharey=True)
+        axs_cmp = axs_cmp.flatten()
+
+        qcm_pv_pairs = []
+        # finde alle QCM RATE-Spalten mit Materialnamen
+        for col in df.columns:
+            if col.startswith("QCM RATE") and col.endswith("nmol_s"):
+                mat = col.replace("QCM RATE ", "").replace(" nmol_s", "")
+                # finde passende PV-Spalte, z. B. '1 - PbI2 PV'
+                pv_matches = [c for c in df.columns if c.endswith(" PV") and mat in c]
+                if pv_matches:
+                    qcm_pv_pairs.append((mat, col, pv_matches[0]))
+
+        #st.write("Spaltenübersicht:", df.columns.tolist())
+        for i, (mat, qcm_col, pv_col) in enumerate(qcm_pv_pairs[:4]):
+            qcm_values = df[qcm_col]
+            pv_values = df[pv_col]
+            axs_cmp[i].plot(df["time_seconds"], qcm_values, label=f"QCM RATE {mat}")
+            axs_cmp[i].plot(df["time_seconds"], pv_values, '--', label=f"{mat} PV", color='red')
+
+            deviation = (qcm_values.mean() - pv_values.mean()) / max(pv_values.mean(), 1e-6)
+            if abs(deviation) > 0.2:
+                axs_cmp[i].set_facecolor('#ffe6e6')  # hellrot bei >20% Abweichung
+            elif abs(deviation) > 0.1:
+                axs_cmp[i].set_facecolor('#fff5cc')  # hellgelb bei >10%
+
+            axs_cmp[i].set_title(mat)
+            axs_cmp[i].set_xlabel("Time (s)")
+            axs_cmp[i].set_ylim(-0.05,1.5)
+            axs_cmp[i].legend()
+            axs_cmp[i].text(0.98, 0.02, f"{deviation * 100:.1f} %", transform=axs_cmp[i].transAxes,
+                            fontsize=8, ha='right', va='bottom',
+                            bbox=dict(facecolor='white', edgecolor='gray', boxstyle='round,pad=0.3'))
+
+        plt.tight_layout()
+        st.pyplot(fig_cmp)
 
     # Display TSP settings, compositions, ratios, and totals in table
     with st.expander("📋 Process Overview Table", expanded=True):
@@ -310,44 +463,9 @@ if uploaded_file is not None:
                 "Deposition Rate (nm/s)": round(rate, 3)
             })
 
-    # QCM-RATET1_x in nmol/s berechnen
-    for col in df.columns:
-        if col.startswith("QCM RATET1") and col.split()[-1] in df.columns:
-            continue  # skip invalid entries
-        if col.startswith("QCM RATET1"):
-            material = col.split()[-1]
-            rate_nm_s = df[col]
-            from log_parser import MATERIAL_PROPERTIES, AVOGADRO
+    ## qcm nanomol calculation block
 
-            props = MATERIAL_PROPERTIES.get(material)
-            if props:
-                rho = props['density']
-                M = props['molar_mass']
-                rate_nmol_s = rate_nm_s * 1e-7 * rho / M * 1e9 #* AVOGADRO   # [nmol/s]
-                df[f"QCM RATE {material} nmol_s"] = rate_nmol_s
-
-    results["Time Series Raw"] = df.copy()  # wichtig, damit auch neue Spalten erhalten bleiben!
-
-    #df = results.get("Time Series Raw", df)
-
-
-    # PV vs. QCM-Rate Abweichung berechnen
-    pv_cols = [col for col in df.columns if col.endswith("PV")]
-    qcm_rate_cols = [col for col in df.columns if col.startswith("QCM RATE") and col.endswith("nmol_s")]
-    deviations = {}
-    for pv_col in pv_cols:
-        mat = pv_col.split()[1]
-        matching_qcm = [q for q in qcm_rate_cols if mat in q]
-        if matching_qcm:
-            qcm_col = matching_qcm[0]
-            pv_mean = df[pv_col].mean()
-            qcm_mean = df[qcm_col].mean()
-            if pv_mean:
-                deviation = round((qcm_mean - pv_mean) / pv_mean * 100, 2)
-                deviations[f"{mat} QCM vs PV [%]"] = deviation
-
-    if deviations:
-        results["QCM-PV Rate Deviations [%]"] = deviations
+    ## qcm nanomol calculation block was here
 
     st.subheader("🧪 Extracted Results")
     # Get the first key-value pair
@@ -477,45 +595,6 @@ if uploaded_file is not None:
             plt.tight_layout()
             st.pyplot(fig)
 
-    # Vergleich QCM-Rate vs PV (automatisch)
-    with st.expander("📐 QCM RATE vs PV (auto)", expanded=False):
-        fig_cmp, axs_cmp = plt.subplots(2, 2, figsize=(10, 6), sharex=True, sharey=True)
-        axs_cmp = axs_cmp.flatten()
-
-        qcm_pv_pairs = []
-        # finde alle QCM RATE-Spalten mit Materialnamen
-        for col in df.columns:
-            if col.startswith("QCM RATE") and col.endswith("nmol_s"):
-                mat = col.replace("QCM RATE ", "").replace(" nmol_s", "")
-                # finde passende PV-Spalte, z. B. '1 - PbI2 PV'
-                pv_matches = [c for c in df.columns if c.endswith(" PV") and mat in c]
-                if pv_matches:
-                    qcm_pv_pairs.append((mat, col, pv_matches[0]))
-
-        #st.write("Spaltenübersicht:", df.columns.tolist())
-        for i, (mat, qcm_col, pv_col) in enumerate(qcm_pv_pairs[:4]):
-            qcm_values = df[qcm_col]
-            pv_values = df[pv_col]
-            axs_cmp[i].plot(df["time_seconds"], qcm_values, label=f"QCM RATE {mat}")
-            axs_cmp[i].plot(df["time_seconds"], pv_values, '--', label=f"{mat} PV", color='red')
-
-            deviation = (qcm_values.mean() - pv_values.mean()) / max(pv_values.mean(), 1e-6)
-            if abs(deviation) > 0.2:
-                axs_cmp[i].set_facecolor('#ffe6e6')  # hellrot bei >20% Abweichung
-            elif abs(deviation) > 0.1:
-                axs_cmp[i].set_facecolor('#fff5cc')  # hellgelb bei >10%
-
-            axs_cmp[i].set_title(mat)
-            axs_cmp[i].set_xlabel("Time (s)")
-            axs_cmp[i].set_ylim(-0.05,1.5)
-            axs_cmp[i].legend()
-            axs_cmp[i].text(0.98, 0.02, f"{deviation * 100:.1f} %", transform=axs_cmp[i].transAxes,
-                            fontsize=8, ha='right', va='bottom',
-                            bbox=dict(facecolor='white', edgecolor='gray', boxstyle='round,pad=0.3'))
-
-        plt.tight_layout()
-        st.pyplot(fig_cmp)
-
 # 🔧 Element Composition Vergleich + TSP-Korrektur
     with st.expander("🧪 Adjust TSP Based on Measured Composition", expanded=False):
         st.markdown("Gebe die gemessene Elementzusammensetzung in at% ein:")
@@ -543,3 +622,78 @@ if uploaded_file is not None:
             st.json(scale_factors)
             st.markdown("**TSP-Korrekturziel (relativ in %):**")
             st.json(corrected)
+
+    with st.expander("📋 Summary Table Export", expanded=True):
+        summary_data = {}
+        # Basis-Metadaten
+        summary_data["Sample ID"] = metadata.get("Substrate Number", "")
+        summary_data["Operator"] = metadata.get("operator", "")
+        summary_data["Date"] = metadata.get("Date", "")
+        summary_data["Time"] = metadata.get("Time", "")
+        summary_data["Controller Settings"] = metadata.get("Controller settings", "")
+        summary_data["Filename"] = metadata.get("Filename", "")
+        summary_data["Recipe"] = metadata.get("Recipe", "")
+        summary_data["Process ID"] = metadata.get("process ID", "unknown")
+
+        # TSP, PV, Aout for sources 1–4
+        for i, mat in enumerate(["PbI2", "CsI", "CsBr", "SnI2"], start=1):
+            tsp_col = next((c for c in df.columns if mat in c and "TSP" in c), None)
+            pv_col = next((c for c in df.columns if mat in c and "PV" in c), None)
+            aout_col = next((c for c in df.columns if mat in c and "Aout" in c), None)
+            t_col = next((c for c in df.columns if mat in c and " T" in c), None)
+            qcm_col = next((c for c in df.columns if mat in c and "QCM Thickness" in c), None)
+            xl_col = next((c for c in df.columns if mat in c and "XLIFE" in c), None)
+
+            summary_data[f"TSP Source {i}"] = round(df[tsp_col].mean(), 3) if tsp_col else None
+            summary_data[f"PV Source {i}"] = round(df[pv_col].mean(), 3) if pv_col else None
+            summary_data[f"Aout Source {i}"] = round(df[aout_col].max(), 2) if aout_col else None
+            summary_data[f"Max T Source {i}"] = round(df[t_col].max(), 1) if t_col else None
+            qcm_value = comp_df.loc[comp_df['Name'] == mat, 'QCM']
+            summary_data[f"QCM Thickness Source {i}"] = round(float(qcm_value.values[0]), 2) if not qcm_value.empty else None
+            summary_data[f"QCM Life Source {i}"] = round(df[xl_col].max(), 1) if xl_col else None
+
+        summary_data["QCM Total Thickness"] = round(sum(v for k, v in summary_data.items() if "QCM Thickness Source" in k and isinstance(v, (int, float))), 2)
+        summary_data["Deposition Time (min)"] = results.get("Process_time", (0,))[0]
+        summary_data["Deposition Rate (nm/s)"] = round(summary_data["QCM Total Thickness"] / (summary_data["Deposition Time (min)"] * 60), 3) if summary_data["Deposition Time (min)"] else 0
+
+        # Elemente (aus TSP und QCM at%)
+        for i, el in enumerate(["Cs", "Sn", "Pb", "I", "Br"], start=1):
+            summary_data[f"Target Element {i} ({el})"] = results.get("Elemental Composition (from TSP)", {}).get(el, 0)
+            summary_data[f"Measured Element {i} ({el})"] = results.get("QCM at%", {}).get(el, 0)
+
+        # Verhältnisse
+        summary_data["Target Ratio Cs/(Sn+Pb)"] = round(results.get("Measured Composition (from TSP)", {}).get("Cs/(Sn+Pb)", 0), 2)
+        summary_data["Target Ratio Sn/(Sn+Pb)"] = round(results.get("Measured Composition (from TSP)", {}).get("Sn/(Sn+Pb)", 0), 2)
+        summary_data["Target Ratio Br/(Br+I)"] = round(results.get("Measured Composition (from TSP)", {}).get("Br/(Br+I)", 0), 2)
+        summary_data["Measured Ratio Cs/(Sn+Pb)"] = float(comp_df.loc[comp_df['Name'] == "Cs/(Sn+Pb)", 'QCM'].values[0])
+        summary_data["Measured Ratio Sn/(Sn+Pb)"] = float(comp_df.loc[comp_df['Name'] == "Sn/(Sn+Pb)", 'QCM'].values[0])
+        summary_data["Measured Ratio Br/(Br+I)"] = round(float(comp_df.loc[comp_df['Name'] == "Br/(Br+I)", 'QCM'].values[0]), 2)
+
+        # Drücke
+        p1 = df["Vacuum Pressure1"]
+        p2 = df["Vacuum Pressure2"]
+        summary_data["Pressure1 min"] = f"{p1.min():.2e}"
+        summary_data["Pressure1 max"] = f"{p1.max():.2e}"
+        summary_data["Pressure2 min"] = f"{p2.min():.2e}"
+        summary_data["Pressure2 max"] = f"{p2.max():.2e}"
+
+        summary_rows = [(k, v, "") for k, v in summary_data.items()]
+        unit_map = {
+            "TSP": "nmol/s", "PV": "nmol/s", "Aout": "%", "Max T": "°C", "QCM Thickness": "nm",
+            "QCM Total Thickness": "nm", "Deposition Time": "min", "Deposition Rate": "nm/s",
+            "Element": "at.%", "Ratio": "-", "Pressure": "mbar", "Life": "h"
+        }
+        for i, row in enumerate(summary_rows):
+            for key, unit in unit_map.items():
+                if key in row[0]:
+                    summary_rows[i] = (row[0], row[1], unit)
+                    break
+        summary_df = pd.DataFrame(summary_rows, columns=["Parameter", "Value", "Unit"])
+        st.dataframe(summary_df, use_container_width=True)
+
+        # Download
+        csv = summary_df.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Download Summary as CSV", csv, file_name="summary_table.csv", mime="text/csv")
+
+
+
