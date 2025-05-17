@@ -84,6 +84,54 @@ if uploaded_file is not None:
                 "Br/(Br+I)": round(Br / (Br + I), 2) if (Br + I) > 0 else 0.0
             }
 
+    # TSP vs PV Summary Table
+    with st.expander("📊 TSP vs PV Summary Table", expanded=True):
+        rows = ["PbI2", "CsI", "CsBr", "SnI2", "Cs", "Sn", "Pb", "I", "Br", "Cs/(Sn+Pb)", "Sn/(Sn+Pb)", "Br/(Br+I)"]
+        data = {"Name": rows, "TSP": [], "PV": []}
+
+        # Mittelwerte für Materialien
+        pv_cols = [col for col in df.columns if col.endswith("PV")]
+        tsp_cols = [col for col in df.columns if col.endswith("TSP")]
+        shutter_open = df["Shutter ShutterAngle0..1"] > 45
+
+
+        def get_mean(col, use_filter=False):
+            if col in df.columns:
+                if use_filter:
+                    return df.loc[shutter_open, col].mean()
+                return df[col].mean()
+            return 0.0
+
+
+        material_map = {
+            "PbI2": "PbI2",
+            "CsI": "CsI",
+            "CsBr": "CsBr",
+            "SnI2": "SnI2"
+        }
+
+        for mat in ["PbI2", "CsI", "CsBr", "SnI2"]:
+            tsp_val = get_mean(next((c for c in tsp_cols if mat in c), ""))
+            pv_val = get_mean(next((c for c in pv_cols if mat in c), ""), use_filter=True)
+            data["TSP"].append(round(tsp_val, 3))
+            data["PV"].append(round(pv_val, 3))
+
+        # Elemente und Verhältnisse (TSP + PV at%)
+        for el in ["Cs", "Sn", "Pb", "I", "Br"]:
+            tsp_val = results.get("Elemental Composition (from TSP)", {}).get(el, 0.0)
+            pv_val = results.get("Elemental Composition (from PV)", {}).get(el, 0.0)
+            data["TSP"].append(round(tsp_val, 2))
+            data["PV"].append(round(pv_val, 2))
+
+        for r in ["Cs/(Sn+Pb)", "Sn/(Sn+Pb)", "Br/(Br+I)"]:
+            tsp_val = results.get("Measured Composition (from TSP)", {}).get(r, 0.0)
+            pv_val = results.get("Target Composition (from PV)", {}).get(r, 0.0)
+            data["TSP"].append(round(tsp_val, 2))
+            data["PV"].append(round(pv_val, 2))
+
+        comp_df = pd.DataFrame(data)
+        st.dataframe(comp_df, use_container_width=False, height=500)
+
     # Fixed 2x2 plot of TSP, PV, Aout with deviation highlighting
     with st.expander("📉 TSP vs PV vs Aout (per source)", expanded=False):
         source_ids = ["PbI2", "CsI", "CsBr", "SnI2"]
