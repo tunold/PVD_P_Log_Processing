@@ -23,15 +23,19 @@ def load_log_csv(path_or_buffer):
         line = fh.readline().strip()
 
         # Lies Metadaten
-        while line.startswith('#'):
+        while line.startswith('#') or line.startswith('"#') or line.strip() == "":
             if ':' in line:
-                key = line.split(':')[0][1:].strip()
+                key = line.split(':')[0].lstrip('#"').strip()
                 value = str.join(':', line.split(':')[1:]).strip()
                 metadata[key] = value
             line = fh.readline().strip()
 
-        # Lese restliche Datei mit pandas
-        df = pd.read_csv(fh, sep='\t')
+        # Jetzt ist fh am Start der Datenzeile – Lese DataFrame
+        try:
+            df = pd.read_csv(fh, sep='\t')
+        except Exception as e:
+            df = pd.DataFrame()
+            metadata['ReadError'] = str(e)
 
     # Versuche Zeitinformationen zu kombinieren
     if 'Date' in metadata and 'Time' in df.columns:
@@ -45,6 +49,7 @@ def load_log_csv(path_or_buffer):
 
     return df, metadata
 
+
 if uploaded_file is not None:
     import tempfile
     with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
@@ -57,6 +62,10 @@ if uploaded_file is not None:
     for col in df.columns:
         if "Aout" in col:
             df[col] = df[col] / 100
+
+    if "Time" not in df.columns:
+        st.warning(f"'Time' column missing in file: {fname}")
+        st.write(df.head())
 
     results = process_log_dataframe_dynamic(df, metadata=metadata)
     df = results.get("Time Series Raw", df)
