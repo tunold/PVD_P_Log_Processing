@@ -216,4 +216,3 @@ def process_log_dataframe_dynamic(df, metadata=None):
     results["Time Series Filtered"] = filtered_df.copy()
 
     return {**metadata, **results}
-

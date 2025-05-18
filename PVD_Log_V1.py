@@ -23,19 +23,15 @@ def load_log_csv(path_or_buffer):
         line = fh.readline().strip()
 
         # Lies Metadaten
-        while line.startswith('#') or line.startswith('"#') or line.strip() == "":
+        while line.startswith('#'):
             if ':' in line:
-                key = line.split(':')[0].lstrip('#"').strip()
+                key = line.split(':')[0][1:].strip()
                 value = str.join(':', line.split(':')[1:]).strip()
                 metadata[key] = value
             line = fh.readline().strip()
 
-        # Jetzt ist fh am Start der Datenzeile – Lese DataFrame
-        try:
-            df = pd.read_csv(fh, sep='\t')
-        except Exception as e:
-            df = pd.DataFrame()
-            metadata['ReadError'] = str(e)
+        # Lese restliche Datei mit pandas
+        df = pd.read_csv(fh, sep='\t')
 
     # Versuche Zeitinformationen zu kombinieren
     if 'Date' in metadata and 'Time' in df.columns:
@@ -49,7 +45,6 @@ def load_log_csv(path_or_buffer):
 
     return df, metadata
 
-
 if uploaded_file is not None:
     import tempfile
     with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
@@ -62,10 +57,6 @@ if uploaded_file is not None:
     for col in df.columns:
         if "Aout" in col:
             df[col] = df[col] / 100
-
-    if "Time" not in df.columns:
-        st.warning(f"'Time' column missing in file: {fname}")
-        st.write(df.head())
 
     results = process_log_dataframe_dynamic(df, metadata=metadata)
     df = results.get("Time Series Raw", df)
@@ -632,6 +623,24 @@ if uploaded_file is not None:
             st.markdown("**TSP-Korrekturziel (relativ in %):**")
             st.json(corrected)
 
+    # Durchschnittliche QCM-Raten pro Material während Shutter offen
+    # Durchschnittliche QCM-Raten pro Material während Shutter offen
+    avg_qcm_rates_nmol = {}
+    avg_qcm_rates_nm = {}
+    shutter_open = df["Shutter ShutterAngle0..1"] > 45
+
+    for col in df.columns:
+        if col.startswith("QCM RATE") and col.endswith("nmol_s"):
+            mat = col.replace("QCM RATE ", "").replace(" nmol_s", "")
+            nmol_val = df.loc[shutter_open, col].mean()
+            avg_qcm_rates_nmol[mat] = round(nmol_val, 3)
+
+            # Finde die entsprechende Spalte mit QCM RATE in nm/s (falls vorhanden)
+            raw_rate_col = f"QCM RATET1 {mat}"
+            if raw_rate_col in df.columns:
+                rate_nm = df.loc[shutter_open, raw_rate_col].mean()
+                avg_qcm_rates_nm[mat] = round(rate_nm, 3)
+
     with st.expander("📋 Summary Table Export", expanded=True):
         summary_data = {}
         # Basis-Metadaten
@@ -665,6 +674,15 @@ if uploaded_file is not None:
         summary_data["Deposition Time (min)"] = results.get("Process_time", (0,))[0]
         summary_data["Deposition Rate (nm/s)"] = round(summary_data["QCM Total Thickness"] / (summary_data["Deposition Time (min)"] * 60), 3) if summary_data["Deposition Time (min)"] else 0
 
+        # Mittlere QCM-Raten während Shutter offen (nmol/s und nm/s)
+        for i, mat in enumerate(["PbI2", "CsI", "CsBr", "SnI2"], start=1):
+            nmol_rate = avg_qcm_rates_nmol.get(mat)
+            nm_rate = avg_qcm_rates_nm.get(mat)
+            if nmol_rate is not None:
+                summary_data[f"QCM Rate Source {i} ({mat}) nmol/s"] = nmol_rate
+            if nm_rate is not None:
+                summary_data[f"QCM Rate Source {i} ({mat}) nm/s"] = nm_rate
+
         # Elemente (aus TSP und QCM at%)
         for i, el in enumerate(["Cs", "Sn", "Pb", "I", "Br"], start=1):
             summary_data[f"Target Element {i} ({el})"] = results.get("Elemental Composition (from TSP)", {}).get(el, 0)
@@ -697,12 +715,109 @@ if uploaded_file is not None:
                 if key in row[0]:
                     summary_rows[i] = (row[0], row[1], unit)
                     break
+            else:
+                # fallback für Einheiten direkt im Namen
+                if "nmol/s" in row[0]:
+                    summary_rows[i] = (row[0], row[1], "nmol/s")
+                elif "nm/s" in row[0]:
+                    summary_rows[i] = (row[0], row[1], "nm/s")
+
         summary_df = pd.DataFrame(summary_rows, columns=["Parameter", "Value", "Unit"])
         st.dataframe(summary_df, use_container_width=True)
+
+        ## generate json
+        import json
+
+        # Zeitachse extrahieren
+        time_array = df["time_seconds"].tolist()
+
+        # Alle Zeitreihen extrahieren
+        variables = {}
+        for col in df.columns:
+            if col == "time_seconds":
+                continue
+            if col == "time_seconds" or df[col].isna().all() or col.startswith("Unnamed:"):
+                continue
+            values = df[col].replace({np.nan: None}).tolist()
+
+            unit = ""
+            if "nmol_s" in col:
+                unit = "nmol/s"
+            elif "nm/s" in col:
+                unit = "nm/s"
+            elif "Aout" in col:
+                unit = "%"
+            elif "T" in col and "Source" in col:
+                unit = "°C"
+            elif "Pressure" in col:
+                unit = "mbar"
+            elif "TSP" in col or "PV" in col:
+                unit = "nmol/s"
+            elif "QCM Thickness" in col:
+                unit = "nm"
+
+            variables[col] = {
+                "unit": unit,
+                "time_series": values
+            }
+
+        # Einträge aus summary_data ergänzen
+        for key, val in summary_data.items():
+            unit = ""
+            if "nmol/s" in key:
+                unit = "nmol/s"
+            elif "nm/s" in key:
+                unit = "nm/s"
+            elif "at%" in key or "Element" in key:
+                unit = "at.%"
+            elif "Ratio" in key:
+                unit = "-"
+            elif "Thickness" in key:
+                unit = "nm"
+            elif "Time" in key:
+                unit = "min"
+            elif "Pressure" in key:
+                unit = "mbar"
+            elif "T Source" in key:
+                unit = "°C"
+            elif "Aout" in key:
+                unit = "%"
+
+            variables[key] = {
+                "unit": unit,
+                "value": val
+            }
+
+        # Komplettes JSON-Dokument
+        json_data = {
+            "metadata": {
+                "Filename": metadata.get("Filename", ""),
+                "Sample ID": metadata.get("Substrate Number", ""),
+                "Operator": metadata.get("operator", ""),
+                "Date": str(metadata.get("Date", "")),
+                "Time": str(metadata.get("Time", "")),
+                "Recipe": metadata.get("Recipe", ""),
+                "Process ID": metadata.get("process ID", ""),
+            },
+            "time": time_array,
+            "variables": variables
+        }
+
+        # Streamlit Download
+
+        json_str = json.dumps(json_data, indent=2, default=str)
+
+        st.download_button(
+            label="📥 Download Summary + Time Series as JSON",
+            data=json_str,
+            file_name="summary_full.json",
+            mime="application/json"
+        )
+
+        ###
 
         # Download
         csv = summary_df.to_csv(index=False).encode("utf-8")
         st.download_button("📥 Download Summary as CSV", csv, file_name="summary_table.csv", mime="text/csv")
-
 
 
