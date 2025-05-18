@@ -9,7 +9,19 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Log File Analysis", layout="wide")
 st.title("📊 Thin Film Process Log Analysis")
 
-uploaded_file = st.file_uploader("Upload log file (.csv)", type="csv")
+mode = st.radio("Select mode", ["Single File Upload", "Batch Processing"])
+
+if mode == "Single File Upload":
+    uploaded_file = st.file_uploader("Upload log file (.csv)", type="csv")
+    uploaded_files = [uploaded_file] if uploaded_file else []
+else:
+    import os
+    directory = st.text_input("Enter directory with log CSV files")
+    uploaded_files = []
+    if directory and os.path.isdir(directory):
+        uploaded_files = [os.path.join(directory, f) for f in os.listdir(directory) if f.endswith(".csv")]
+        st.success(f"Found {len(uploaded_files)} CSV files.")
+
 
 def load_log_csv(path_or_buffer):
     """
@@ -45,14 +57,17 @@ def load_log_csv(path_or_buffer):
 
     return df, metadata
 
-if uploaded_file is not None:
-    import tempfile
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-        tmp.write(uploaded_file.getvalue())
-        tmp_path = tmp.name
+for idx, filepath in enumerate(uploaded_files):
+    if filepath is None:
+        continue
 
-    df, metadata = load_log_csv(tmp_path)
-    metadata["Filename"] = uploaded_file.name
+# === EINZELDATEI VERARBEITUNG ===
+    st.markdown(f"### 📁 Processing file {idx+1}: `{os.path.basename(filepath)}`")
+
+    with open(filepath, 'rb') as f:
+        df, metadata = load_log_csv(f.name)
+
+    metadata["Filename"] = os.path.basename(filepath)
     # Skaliere alle Aout-Werte zur besseren Darstellung
     for col in df.columns:
         if "Aout" in col:
@@ -261,71 +276,73 @@ if uploaded_file is not None:
 
         styled_df = comp_df.style.applymap(highlight_deviation, subset=["% Deviation"])
         #st.dataframe(styled_df, use_container_width=False, height=500)
-        select_table = st.selectbox("Choose display mode",["classic dataframe","plotly"])
 
-        if select_table == "classic dataframe":
-            st.dataframe(comp_df, use_container_width=False, height=500)
-        else:
+        if mode == "Single File Upload":
+            select_table = st.selectbox("Choose display mode",["classic dataframe","plotly"])
 
-            # Spalten vorbereiten
-            columns = comp_df.columns.tolist()
-            comp_df = comp_df.fillna("")
-            #values = [comp_df[col].tolist() for col in columns]
-            values = [[str(val) for val in comp_df[col].fillna("")] for col in comp_df.columns]
+            if select_table == "classic dataframe":
+                st.dataframe(comp_df, use_container_width=False, height=500)
+            else:
 
-            fill_colors = []
-            # Zeilen 5–8 markieren (Element-Zeilen)
-            row_indices_element = list(range(4, 9))
+                # Spalten vorbereiten
+                columns = comp_df.columns.tolist()
+                comp_df = comp_df.fillna("")
+                #values = [comp_df[col].tolist() for col in columns]
+                values = [[str(val) for val in comp_df[col].fillna("")] for col in comp_df.columns]
 
-            # Spaltennamen
-            columns = comp_df.columns.tolist()
+                fill_colors = []
+                # Zeilen 5–8 markieren (Element-Zeilen)
+                row_indices_element = list(range(4, 9))
 
-            # Werte als Strings vorbereiten (robust gegen gemischte Typen)
-            values = [[str(val) for val in comp_df[col].fillna("")] for col in columns]
+                # Spaltennamen
+                columns = comp_df.columns.tolist()
 
-            # Formatierung: ".2f" für Zahlen, sonst None
-            formats = [".2f" if pd.api.types.is_numeric_dtype(comp_df[col]) else None for col in columns]
+                # Werte als Strings vorbereiten (robust gegen gemischte Typen)
+                values = [[str(val) for val in comp_df[col].fillna("")] for col in columns]
 
-            # Zellfarben initialisieren
-            fill_colors = []
-            row_indices_element = list(range(4, 9))  # Zeilen 5–9 (Elemente)
+                # Formatierung: ".2f" für Zahlen, sonst None
+                formats = [".2f" if pd.api.types.is_numeric_dtype(comp_df[col]) else None for col in columns]
 
-            for col in comp_df.columns:
-                colors = []
-                for idx in range(len(comp_df)):
-                    if col == "% Deviation":
-                        try:
-                            val = float(comp_df[col].iloc[idx])
-                            if abs(val) > 20:
-                                colors.append('#ffe6e6')  # rot
-                            elif abs(val) > 10:
-                                colors.append('#fff3cd')  # gelb
-                            else:
+                # Zellfarben initialisieren
+                fill_colors = []
+                row_indices_element = list(range(4, 9))  # Zeilen 5–9 (Elemente)
+
+                for col in comp_df.columns:
+                    colors = []
+                    for idx in range(len(comp_df)):
+                        if col == "% Deviation":
+                            try:
+                                val = float(comp_df[col].iloc[idx])
+                                if abs(val) > 20:
+                                    colors.append('#ffe6e6')  # rot
+                                elif abs(val) > 10:
+                                    colors.append('#fff3cd')  # gelb
+                                else:
+                                    colors.append('#e8f4ff' if idx in row_indices_element else 'white')
+                            except:
                                 colors.append('#e8f4ff' if idx in row_indices_element else 'white')
-                        except:
+                        else:
                             colors.append('#e8f4ff' if idx in row_indices_element else 'white')
-                    else:
-                        colors.append('#e8f4ff' if idx in row_indices_element else 'white')
-                fill_colors.append(colors)
+                    fill_colors.append(colors)
 
-            # Plotly-Tabelle
-            fig = go.Figure(data=[go.Table(
-                header=dict(
-                    values=[f"<b>{col}</b>" for col in columns],
-                    fill_color='lightgrey',
-                    align='left',
-                    font=dict(size=14, color='black')
-                ),
-                cells=dict(
-                    values=values,
-                    fill_color=fill_colors,
-                    align='left',
-                    font=dict(size=13, color='black'),
-                    format=formats
-                )
-            )])
+                # Plotly-Tabelle
+                fig = go.Figure(data=[go.Table(
+                    header=dict(
+                        values=[f"<b>{col}</b>" for col in columns],
+                        fill_color='lightgrey',
+                        align='left',
+                        font=dict(size=14, color='black')
+                    ),
+                    cells=dict(
+                        values=values,
+                        fill_color=fill_colors,
+                        align='left',
+                        font=dict(size=13, color='black'),
+                        format=formats
+                    )
+                )])
 
-            st.plotly_chart(fig, use_container_width=False, height=700)
+                st.plotly_chart(fig, use_container_width=False, height=700)
 
 
     # Fixed 2x2 plot of TSP, PV, Aout with deviation highlighting
@@ -568,60 +585,61 @@ if uploaded_file is not None:
         st.subheader("📏 QCM vs PV Rate Deviations")
         st.json(results["QCM-PV Rate Deviations [%]"])
 
-    # Optional Zeitreihen-Plot
-    with st.expander("📉 Time Series Plot"):
-        ts_raw = results.get("Time Series Raw", df)
-        ts_filtered = results.get("Time Series Filtered", df)
-        if ts_raw is not None:
-            use_filtered = st.checkbox("Only show shutter open phase (filtered)", value=False)
-            ts_df = ts_filtered.copy() if use_filtered else ts_raw.copy()
+    if mode == "Single File Upload":
+        # Optional Zeitreihen-Plot
+        with st.expander("📉 Time Series Plot"):
+            ts_raw = results.get("Time Series Raw", df)
+            ts_filtered = results.get("Time Series Filtered", df)
+            if ts_raw is not None:
+                use_filtered = st.checkbox("Only show shutter open phase (filtered)", value=False)
+                ts_df = ts_filtered.copy() if use_filtered else ts_raw.copy()
 
-            variables = [col for col in ts_df.columns if col != "time_seconds"]
-            st.write("Select multiple variables per subplot (4 plots total):")
-            selected_vars = [
-                st.multiselect(f"Y-axis variables for plot {i+1}", variables, key=f"multi_var{i}")
-                for i in range(4)
-            ]
+                variables = [col for col in ts_df.columns if col != "time_seconds"]
+                st.write("Select multiple variables per subplot (4 plots total):")
+                selected_vars = [
+                    st.multiselect(f"Y-axis variables for plot {i+1}", variables, key=f"multi_var{i}")
+                    for i in range(4)
+                ]
 
-            fig, axs = plt.subplots(2, 2, figsize=(10, 6), sharex=True, sharey=True)
-            axs = axs.flatten()
-            for i, var_list in enumerate(selected_vars):
-                for var in var_list:
-                    axs[i].plot(ts_df["time_seconds"], ts_df[var], label=var)
-                if var_list:
-                    axs[i].set_title(", ".join(var_list))
-                    axs[i].set_xlabel("Time (s)")
-                    axs[i].legend()
-            plt.tight_layout()
-            st.pyplot(fig)
+                fig, axs = plt.subplots(2, 2, figsize=(10, 6), sharex=True, sharey=True)
+                axs = axs.flatten()
+                for i, var_list in enumerate(selected_vars):
+                    for var in var_list:
+                        axs[i].plot(ts_df["time_seconds"], ts_df[var], label=var)
+                    if var_list:
+                        axs[i].set_title(", ".join(var_list))
+                        axs[i].set_xlabel("Time (s)")
+                        axs[i].legend()
+                plt.tight_layout()
+                st.pyplot(fig)
 
 # 🔧 Element Composition Vergleich + TSP-Korrektur
-    with st.expander("🧪 Adjust TSP Based on Measured Composition", expanded=False):
-        st.markdown("Gebe die gemessene Elementzusammensetzung in at% ein:")
-        elements = ['Cs', 'Sn', 'Pb', 'I', 'Br']
-        measured_input = {el: st.number_input(f"{el} at%", min_value=0.0, max_value=100.0, value=0.0, step=0.1) for el in elements}
+        with st.expander("🧪 Adjust TSP Based on Measured Composition", expanded=False):
+            st.markdown("Gebe die gemessene Elementzusammensetzung in at% ein:")
+            elements = ['Cs', 'Sn', 'Pb', 'I', 'Br']
+            measured_input = {el: st.number_input(f"{el} at%", min_value=0.0, max_value=100.0, value=0.0, step=0.1) for el in elements}
 
-        # Hole TSP-basierte Zusammensetzung
-        tsp_comp = results.get("Measured Composition (from TSP)", {})
-        st.markdown("---")
-        st.markdown("Vergleich mit TSP-basierter Zielvorgabe:")
-        st.json(tsp_comp)
-
-        # Korrektur-Vorschlag
-        if sum(measured_input.values()) > 0:
+            # Hole TSP-basierte Zusammensetzung
+            tsp_comp = results.get("Measured Composition (from TSP)", {})
             st.markdown("---")
-            st.subheader("💡 TSP-Korrekturvorschlag")
-            corrected = {}
-            scale_factors = {}
-            for el in elements:
-                if el in tsp_comp and measured_input[el] > 0:
-                    scale = tsp_comp[el] / measured_input[el]
-                    corrected[el] = round(scale * 100, 1)
-                    scale_factors[el] = round(scale, 2)
-            st.markdown("**Skalierungsfaktoren für TSP pro Element:**")
-            st.json(scale_factors)
-            st.markdown("**TSP-Korrekturziel (relativ in %):**")
-            st.json(corrected)
+            st.markdown("Vergleich mit TSP-basierter Zielvorgabe:")
+            st.json(tsp_comp)
+
+            # Korrektur-Vorschlag
+            if sum(measured_input.values()) > 0:
+                st.markdown("---")
+                st.subheader("💡 TSP-Korrekturvorschlag")
+                corrected = {}
+                scale_factors = {}
+                for el in elements:
+                    if el in tsp_comp and measured_input[el] > 0:
+                        scale = tsp_comp[el] / measured_input[el]
+                        corrected[el] = round(scale * 100, 1)
+                        scale_factors[el] = round(scale, 2)
+                st.markdown("**Skalierungsfaktoren für TSP pro Element:**")
+                st.json(scale_factors)
+                st.markdown("**TSP-Korrekturziel (relativ in %):**")
+                st.json(corrected)
 
     # Durchschnittliche QCM-Raten pro Material während Shutter offen
     # Durchschnittliche QCM-Raten pro Material während Shutter offen
@@ -804,20 +822,29 @@ if uploaded_file is not None:
         }
 
         # Streamlit Download
+        outname = f"summary_{idx+1:03d}.json"
+        outpath = os.path.join(directory, outname)
 
-        json_str = json.dumps(json_data, indent=2, default=str)
+        with open(outpath, "w", encoding="utf-8") as f_out:
+            json.dump(json_data, f_out, indent=2, default=str)
 
-        st.download_button(
-            label="📥 Download Summary + Time Series as JSON",
-            data=json_str,
-            file_name="summary_full.json",
-            mime="application/json"
-        )
+        st.success(f"Saved: {outpath}")
+
+        #json_str = json.dumps(json_data, indent=2, default=str)
+
+        #st.download_button(
+        #    label="📥 Download Summary + Time Series as JSON",
+        #    data=json_str,
+        #    file_name="summary_full.json",
+        #    mime="application/json"
+        #)
 
         ###
 
         # Download
         csv = summary_df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download Summary as CSV", csv, file_name="summary_table.csv", mime="text/csv")
+
+        if mode == "Single File Upload":
+            st.download_button("📥 Download Summary as CSV", csv, file_name="summary_table.csv", mime="text/csv")
 
 
