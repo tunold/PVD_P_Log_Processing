@@ -751,12 +751,15 @@ for idx, filepath in enumerate(uploaded_files):
 
         # Alle Zeitreihen extrahieren
         variables = {}
+        values = {}
+        time_series = {}
+
         for col in df.columns:
             if col == "time_seconds":
                 continue
-            if col == "time_seconds" or df[col].isna().all() or col.startswith("Unnamed:"):
+            if df[col].isna().all() or col.startswith("Unnamed:"):
                 continue
-            values = df[col].replace({np.nan: None}).tolist()
+            series = df[col].replace({np.nan: None}).tolist()
 
             unit = ""
             if "nmol_s" in col:
@@ -774,9 +777,9 @@ for idx, filepath in enumerate(uploaded_files):
             elif "QCM Thickness" in col:
                 unit = "nm"
 
-            variables[col] = {
+            time_series[col] = {
                 "unit": unit,
-                "time_series": values
+                "values": series
             }
 
         # Einträge aus summary_data ergänzen
@@ -801,7 +804,7 @@ for idx, filepath in enumerate(uploaded_files):
             elif "Aout" in key:
                 unit = "%"
 
-            variables[key] = {
+            values[key] = {
                 "unit": unit,
                 "value": val
             }
@@ -818,7 +821,8 @@ for idx, filepath in enumerate(uploaded_files):
                 "Process ID": metadata.get("process ID", ""),
             },
             "time": time_array,
-            "variables": variables
+            "values": values,
+            "time_series": time_series
         }
 
         # Streamlit Download
