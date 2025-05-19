@@ -860,6 +860,11 @@ for idx, filepath in enumerate(uploaded_files):
                 }
 
         # Einzelwerte aus summary_data übernehmen
+
+        from collections import defaultdict
+
+        scalar_values = defaultdict(dict)
+
         for key, val in summary_data.items():
             unit = ""
             if "nmol/s" in key:
@@ -876,30 +881,57 @@ for idx, filepath in enumerate(uploaded_files):
                 unit = "min"
             elif "Pressure" in key:
                 unit = "mbar"
-            elif "T Source" in key:
+            elif "T Source" in key or "Temperature" in key:
                 unit = "°C"
             elif "Aout" in key:
                 unit = "%"
 
-            scalar_values[key] = {
-                "unit": unit,
-                "value": val
-            }
+            # Gruppierung nach Kategorie
+            if any(mat in key for mat in ["PbI2", "SnI2", "CsI", "CsBr"]):
+                source = next(mat for mat in ["PbI2", "SnI2", "CsI", "CsBr"] if mat in key)
+                label = key.replace(f"{source} ", "").replace("QCM", "").strip()
+                scalar_values[source][label] = {
+                    "unit": unit,
+                    "value": val
+                }
 
-        shutter_open = df["Shutter ShutterAngle0..1"] > 45
-        substrate_pv_col = next((col for col in df.columns if "Substrate" in col and "PV" in col), None)
-        if substrate_pv_col:
-            substrate_temp_mean = df.loc[shutter_open, substrate_pv_col].mean()
-            substrate_temp_max = df[substrate_pv_col].max()
+            elif "Substrate" in key:
+                scalar_values["Substrate"][key.replace("Substrate", "").strip()] = {
+                    "unit": unit,
+                    "value": val
+                }
 
-            scalar_values["Substrate Temperature (mean during open)"] = {
-                "unit": "°C",
-                "value": round(substrate_temp_mean, 1)
-            }
-            scalar_values["Substrate Temperature (max)"] = {
-                "unit": "°C",
-                "value": round(substrate_temp_max, 1)
-            }
+            elif "Pressure" in key:
+                scalar_values["Vacuum"][key] = {
+                    "unit": unit,
+                    "value": val
+                }
+
+            elif any(word in key for word in ["at%", "Ratio", "Composition", "Measured", "Target"]):
+                scalar_values["Composition"][key] = {
+                    "unit": unit,
+                    "value": val
+                }
+
+            elif "Deposition" in key or "Process" in key:
+                scalar_values["Process"][key] = {
+                    "unit": unit,
+                    "value": val
+                }
+
+            else:
+                scalar_values["Other"][key] = {
+                    "unit": unit,
+                    "value": val
+                }
+
+        # In JSON exportierbar machen
+        scalar_values = dict(scalar_values)
+
+        # olde code here
+
+        
+
         # Komplettes JSON-Dokument
         json_data = {
             "metadata": {
