@@ -743,46 +743,123 @@ for idx, filepath in enumerate(uploaded_files):
         summary_df = pd.DataFrame(summary_rows, columns=["Parameter", "Value", "Unit"])
         st.dataframe(summary_df, use_container_width=True)
 
-        ## generate json
+        import re
+        from collections import defaultdict
         import json
 
-        # Zeitachse extrahieren
-        time_array = df["time_seconds"].tolist()
+        # Extrahiere Zeitachse
+        time_array = df["time_seconds"].replace({np.nan: None}).tolist()
 
-        # Alle Zeitreihen extrahieren
-        variables = {}
-        values = {}
-        time_series = {}
+        # Dictionary für Einzelwerte (summary_data)
+        scalar_values = {}
+
+
+        # Klassifizierungsfunktion wie bisher ...
+        def classify_column(col):
+            valid_materials = {"PbI2", "SnI2", "CsBr", "CsI"}
+            substrate_prefix = "Substrate"
+
+            # Time-Spalte als eigene Kategorie
+            if col.strip().lower() == "time":
+                return "Time", "Time", "time", "s"
+
+            # Time-Spalte als eigene Kategorie
+            if col.strip().lower() == "time":
+                return "Time", None, None,  "s"
+
+            # Substrate-Erkennung
+            if substrate_prefix in col:
+                if "PV" in col:
+                    return "Substrate", "PV", "temperature", "°C"
+                elif "TSP" in col:
+                    return "Substrate", "TSP", "temperature", "nmol/s"
+                elif "Aout" in col:
+                    return "Substrate", "Aout", "power", "%"
+
+            # Shutter
+            if "Shutter" in col:
+                return "Shutter", "Shutter", "ShutterAngle", ""
+
+            # Vacuum
+            if "Vacuum" in col:
+                if "Sensor1" in col:
+                    return "Vacuum", "Sensor1", "value", "mbar"
+                elif "Sensor2" in col:
+                    return "Vacuum", "Sensor2", "value", "mbar"
+                elif "Pressure1" in col:
+                    return "Vacuum", "Pressure1", "value", "mbar"
+                elif "Pressure2" in col:
+                    return "Vacuum", "Pressure2", "value", "mbar"
+
+            # Materialerkennung
+            material_match = re.search(r"(PbI2|SnI2|CsBr|CsI)\b", col)
+            material = material_match.group(1) if material_match else None
+
+            # QCM-spezifische Signale
+            if "QCM" in col:
+                if not material:
+                    # versuchen Material am Ende zu erkennen
+                    material_match = re.search(r"(PbI2|SnI2|CsBr|CsI)\s*$", col)
+                    material = material_match.group(1) if material_match else "Misc"
+                if "RATE" in col and "nmol_s" in col:
+                    return material, "QCM", "rate", "nmol/s"
+                elif "Thickness" in col:
+                    return material, "QCM", "thickness", "nm"
+                elif "CH_TIME" in col:
+                    return material, "QCM", "ch_time", "s"
+                elif "FILMNAM" in col:
+                    return material, "QCM", "film_name", "-"
+                elif "RATET1" in col:
+                    return material, "QCM", "raw_rate", "nm/s"
+                elif "SHTSRC" in col:
+                    return material, "QCM", "shutter_status", "-"
+                elif "XSTAT" in col:
+                    return material, "QCM", "sensor_status", "-"
+                elif "XLIFE" in col:
+                    return material, "QCM", "lifetime", "h"
+
+            # Aout, PV, TSP, T (nicht-QCM)
+            if material:
+                if "Aout" in col:
+                    return material, "Aout", "power", "%"
+                elif "PV" in col:
+                    return material, "PV", "rate", "nmol/s"
+                elif "TSP" in col:
+                    return material, "TSP", "rate", "nmol/s"
+                elif " T" in col:
+                    return material, "T", "source_temperature", "°C"
+
+            return "Misc", "Other", col.strip(), ""
+
+
+        # Zeitreihen strukturieren
+        time_series = defaultdict(lambda: defaultdict(dict))
 
         for col in df.columns:
-            if col == "time_seconds":
+            if col == "time_seconds" or df[col].isna().all() or col.startswith("Unnamed:"):
                 continue
-            if df[col].isna().all() or col.startswith("Unnamed:"):
-                continue
-            series = df[col].replace({np.nan: None}).tolist()
 
-            unit = ""
-            if "nmol_s" in col:
-                unit = "nmol/s"
-            elif "nm/s" in col:
-                unit = "nm/s"
-            elif "Aout" in col:
-                unit = "%"
-            elif "T" in col and "Source" in col:
-                unit = "°C"
-            elif "Pressure" in col:
-                unit = "mbar"
-            elif "TSP" in col or "PV" in col:
-                unit = "nmol/s"
-            elif "QCM Thickness" in col:
-                unit = "nm"
+            col_values = df[col].replace({np.nan: None}).tolist()  # 🔄 kein Konflikt mit scalar_values
 
-            time_series[col] = {
-                "unit": unit,
-                "values": series
-            }
+            material, category, measurement, unit = classify_column(col)
 
-        # Einträge aus summary_data ergänzen
+            ##time_series[material][category][measurement] = {
+            #   "unit": unit,
+            #    "values": col_values
+            #}
+
+            if material == "Time":
+                time_series["Time"] = {
+                    "unit": unit,
+                    "values": col_values
+                }
+            else:
+                time_series[material][category][measurement] = {
+                    "unit": unit,
+                    "values": col_values
+                }
+
+        # Einzelwerte aus summary_data übernehmen
         for key, val in summary_data.items():
             unit = ""
             if "nmol/s" in key:
@@ -804,11 +881,25 @@ for idx, filepath in enumerate(uploaded_files):
             elif "Aout" in key:
                 unit = "%"
 
-            values[key] = {
+            scalar_values[key] = {
                 "unit": unit,
                 "value": val
             }
 
+        shutter_open = df["Shutter ShutterAngle0..1"] > 45
+        substrate_pv_col = next((col for col in df.columns if "Substrate" in col and "PV" in col), None)
+        if substrate_pv_col:
+            substrate_temp_mean = df.loc[shutter_open, substrate_pv_col].mean()
+            substrate_temp_max = df[substrate_pv_col].max()
+
+            scalar_values["Substrate Temperature (mean during open)"] = {
+                "unit": "°C",
+                "value": round(substrate_temp_mean, 1)
+            }
+            scalar_values["Substrate Temperature (max)"] = {
+                "unit": "°C",
+                "value": round(substrate_temp_max, 1)
+            }
         # Komplettes JSON-Dokument
         json_data = {
             "metadata": {
@@ -821,8 +912,8 @@ for idx, filepath in enumerate(uploaded_files):
                 "Process ID": metadata.get("process ID", ""),
             },
             "time": time_array,
-            "values": values,
-            "time_series": time_series
+            "values": scalar_values,
+            "time_series": dict(time_series)  # defaultdict → dict konvertieren
         }
 
         # Streamlit Download
