@@ -203,7 +203,7 @@ for doc in filtered_docs:
 
 sample_options = sorted(set(sample_options))
 st.sidebar.write(f"Gefundene Samples: {len(sample_options)}")
-selected_sample = st.selectbox("Gefiltertes Sample auswählen (Sample ID)", sample_options)
+selected_sample = st.selectbox("Gefiltertes Sample auswählen (Sample_ID)", sample_options)
 
 
 # --- Einzeldokument laden ---
@@ -215,47 +215,87 @@ if entry:
     st.subheader(f"📄 Details für Sample: {selected_sample}")
 
     # --- Vergleich Target vs Measured: Elemente und Verhältnisse ---
-    # Optional: XRF-Werte aus anderer Datenbank abrufen
-    xrf_client = MongoClient("mongodb://localhost:27017/")
-    xrf_db = xrf_client["Fatima_Results_Dataframes"]
-    xrf_coll = xrf_db["Standard_Collection"]
-    st.write(selected_sample)
-    xrf_sample_id = selected_sample.replace("-", "_")
-    st.write(xrf_sample_id)
-    xrf_entry = xrf_coll.find_one({"Sample_ID": xrf_sample_id})
-    xrf_scaled = {}
-    if xrf_entry:
-        for el in ["Cs [%]", "Sn [%]", "Pb [%]", "I [%]", "Br [%]"]:
-            val_dict = xrf_entry.get(el, {})
-            val = val_dict.get(' at') if isinstance(val_dict, dict) else None
-            if val is not None:
-                el_clean = el.replace(" [%]", "")
-                xrf_scaled[el_clean] = val * 20  # normiert auf at.%
-                st.write(xrf_scaled[el_clean])
-    else:
-        st.write('xrf not found')
-
     target_comp = entry.get("values", {}).get("Target Composition", {})
     measured_comp = entry.get("values", {}).get("QCM Composition", {})
 
-    element_keys = [k for k in target_comp if 'at%' in k or k in ['Cs', 'Sn', 'Pb', 'I', 'Br']]
-    ratio_keys = [k for k in target_comp if '/' in k]
+    # Optional: XRF-Werte aus anderer Datenbank abrufen
+    xrf_sample_id = selected_sample.replace("-", "_")
+    xrf_entries = list(xrf_coll.find({"Sample_ID": xrf_sample_id}))
+    xrf_scaled = {}
+    xrf_raw_data = {"Cs": [], "Sn": [], "Pb": [], "I": [], "Br": []}
+
+    if xrf_entries:
+        for entry_xrf in xrf_entries:
+            for el in ["Cs [%]", "Sn [%]", "Pb [%]", "I [%]", "Br [%]"]:
+                val_dict = entry_xrf.get(el, {})
+                val = val_dict.get(' at') if isinstance(val_dict, dict) else None
+                if val is not None:
+                    el_clean = el.replace(" [%]", "")
+                    xrf_raw_data[el_clean].append(val * 20)  # normiert auf at.%
+
+        for el, values in xrf_raw_data.items():
+            if values:
+                xrf_scaled[el] = sum(values) / len(values)
+
+        # --- XRF Verhältnisse berechnen ---
+        xrf_ratios = {}
+        cs = xrf_scaled.get("Cs", 0)
+        sn = xrf_scaled.get("Sn", 0)
+        pb = xrf_scaled.get("Pb", 0)
+        i = xrf_scaled.get("I", 0)
+        br = xrf_scaled.get("Br", 0)
+        b = sn + pb
+        if b > 0:
+            xrf_ratios["Cs/(Sn+Pb)"] = cs / b
+            xrf_ratios["Sn/(Sn+Pb)"] = sn / b
+        if (br + i) > 0:
+            xrf_ratios["Br/(Br+I)"] = br / (br + i)
 
 
+
+
+    # Barplot-Funktion
     def make_bar_plot(keys, title):
         elements = sorted(set(keys))
         df_bar = pd.DataFrame({
             "Key": elements,
             "Target": [target_comp.get(el, 0) for el in elements],
             "Measured": [measured_comp.get(el, 0) for el in elements],
-            "XRF": [xrf_scaled.get(el.replace(" at%", "").replace(" [%]", ""), None) for el in elements] if xrf_scaled else [None] * len(elements)
+            "XRF": [
+                xrf_scaled.get(el.replace(" at%", ""), None) if "/" not in el
+                else xrf_ratios.get(el, None)
+                for el in elements
+            ]
         })
-        fig = go.Figure(data=[
-            go.Bar(name='Target', x=df_bar["Key"], y=df_bar["Target"], marker_color='blue'),
-            go.Bar(name='Measured', x=df_bar["Key"], y=df_bar["Measured"], marker_color='red')
-        ])
-        if xrf_scaled:
+
+        fig = go.Figure()
+
+        # Balken
+        fig.add_trace(go.Bar(name='Target', x=df_bar["Key"], y=df_bar["Target"], marker_color='blue'))
+        fig.add_trace(go.Bar(name='Measured', x=df_bar["Key"], y=df_bar["Measured"], marker_color='red'))
+        if df_bar["XRF"].notna().any():
             fig.add_trace(go.Bar(name='XRF (norm.)', x=df_bar["Key"], y=df_bar["XRF"], marker_color='orange'))
+
+        # Horizontale Toleranzlinien (±10 % von PV = Target)
+        for idx, row in df_bar.iterrows():
+            key = row["Key"]
+            y = row["Measured"]
+            if pd.notna(y) and y > 0:
+                fig.add_shape(
+                    type="line",
+                    x0=idx - 0.4, x1=idx + 0.4,
+                    y0=y * 1.1, y1=y * 1.1,
+                    line=dict(color="gray", dash="dash"),
+                    xref="x", yref="y"
+                )
+                fig.add_shape(
+                    type="line",
+                    x0=idx - 0.4, x1=idx + 0.4,
+                    y0=y * 0.9, y1=y * 0.9,
+                    line=dict(color="gray", dash="dash"),
+                    xref="x", yref="y"
+                )
+
         fig.update_layout(
             barmode='group',
             title=title,
@@ -267,9 +307,27 @@ if entry:
         return fig
 
 
+    element_keys = [k for k in target_comp if 'at%' in k or k in ['Cs', 'Sn', 'Pb', 'I', 'Br']]
+    ratio_keys = [k for k in target_comp if '/' in k]
+
     col1, col2 = st.columns(2)
     col1.plotly_chart(make_bar_plot(element_keys, "Elementare Zusammensetzung"), use_container_width=True)
     col2.plotly_chart(make_bar_plot(ratio_keys, "Verhältnisse"), use_container_width=True)
+
+    # --- Histogramme der XRF-Werte ---
+    if any(xrf_raw_data.values()):
+        st.markdown("### 📊 XRF Verteilungen (normiert)")
+        for i, (el, values) in enumerate(xrf_raw_data.items()):
+            if values:
+                if i % 3 == 0:
+                    cols = st.columns(3)
+                fig = px.histogram(values, nbins=50, title=el)
+                fig.update_layout(
+                    xaxis_title=f"{el} at.%", yaxis_title="Häufigkeit",
+                    xaxis=dict(showline=True, linecolor="black"),
+                    yaxis=dict(showline=True, linecolor="black"),
+                )
+                cols[i % 3].plotly_chart(fig, use_container_width=True)
 
     # --- Zeitreihenanzeige ---
     if st.checkbox("📉 Zeitreihen anzeigen"):
